@@ -182,11 +182,21 @@ ORDER BY p.product_name;
 	}
 	var results []*InventoryValuationSummaryResponse
 	db := config.GetDB()
-	if err := db.WithContext(ctx).Raw(sql, map[string]interface{}{
+	// IMPORTANT:
+	// The SQL template conditionally removes the warehouse filter when "AllWarehouse" is true.
+	// GORM expands named params to positional placeholders per-occurrence. If we pass a named param
+	// that no longer exists in the final SQL (e.g. warehouseId), the driver can error with:
+	// "sql: expected N arguments, got N+1".
+	//
+	// Therefore, only include warehouseId when the placeholder is present.
+	args := map[string]interface{}{
 		"businessId":  businessId,
 		"currentDate": currentDate,
-		"warehouseId": warehouseId,
-	}).Scan(&results).Error; err != nil {
+	}
+	if warehouseId != 0 {
+		args["warehouseId"] = warehouseId
+	}
+	if err := db.WithContext(ctx).Raw(sql, args).Scan(&results).Error; err != nil {
 		return nil, err
 	}
 	return results, nil
