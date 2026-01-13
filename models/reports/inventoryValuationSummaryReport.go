@@ -21,8 +21,11 @@ type InventoryValuationSummaryResponse struct {
 }
 
 // SQL for ALL warehouses
-// Simply SUM all qty and qty*base_unit_value up to the report date.
-// This is the most reliable approach - doesn't depend on closing_qty being updated.
+// Compute totals from stock_histories and also include opening_stocks fallback when opening
+// postings are missing from stock_histories (common in legacy/migrated datasets).
+//
+// This matches the behavior of Inventory Valuation By Item report which can derive opening
+// balance from opening_stocks when stock_histories doesn't contain opening-stock postings.
 const sqlAllWarehouses = `
 WITH StockTotals AS (
     SELECT
@@ -34,6 +37,38 @@ WITH StockTotals AS (
     WHERE business_id = @businessId
       AND stock_date <= @currentDate
     GROUP BY product_id, product_type
+),
+HasOpeningHist AS (
+    -- If stock_histories already contains opening-stock postings, do NOT add opening_stocks
+    -- to avoid double counting.
+    SELECT
+        product_id,
+        product_type
+    FROM stock_histories
+    WHERE business_id = @businessId
+      AND stock_date <= @currentDate
+      AND reference_type IN ('POS', 'PGOS', 'PCOS')
+    GROUP BY product_id, product_type
+),
+OpeningFallback AS (
+    -- opening_stocks is not scoped by business_id, so join against products/product_variants
+    -- to ensure we only include rows for this business.
+    SELECT
+        os.product_id,
+        os.product_type,
+        SUM(os.qty) AS opening_qty,
+        SUM(os.qty * os.unit_value) AS opening_asset_value
+    FROM opening_stocks os
+    LEFT JOIN products p
+        ON os.product_type = 'S'
+        AND p.id = os.product_id
+        AND p.business_id = @businessId
+    LEFT JOIN product_variants pv
+        ON os.product_type = 'V'
+        AND pv.id = os.product_id
+        AND pv.business_id = @businessId
+    WHERE (p.id IS NOT NULL OR pv.id IS NOT NULL)
+    GROUP BY os.product_id, os.product_type
 ),
 AllProducts AS (
     SELECT
@@ -57,8 +92,20 @@ AllProducts AS (
 SELECT
     p.product_id,
     p.product_type,
-    COALESCE(s.stock_on_hand, 0) as stock_on_hand,
-    COALESCE(s.asset_value, 0) as asset_value,
+    (
+        COALESCE(s.stock_on_hand, 0)
+        + CASE
+            WHEN oh.product_id IS NULL THEN COALESCE(ofb.opening_qty, 0)
+            ELSE 0
+          END
+    ) as stock_on_hand,
+    (
+        COALESCE(s.asset_value, 0)
+        + CASE
+            WHEN oh.product_id IS NULL THEN COALESCE(ofb.opening_asset_value, 0)
+            ELSE 0
+          END
+    ) as asset_value,
     p.product_name,
     p.product_unit_id,
     p.sku
@@ -66,9 +113,25 @@ FROM
     AllProducts p
     LEFT JOIN StockTotals s ON p.product_id = s.product_id
         AND p.product_type = s.product_type
+    LEFT JOIN HasOpeningHist oh ON p.product_id = oh.product_id
+        AND p.product_type = oh.product_type
+    LEFT JOIN OpeningFallback ofb ON p.product_id = ofb.product_id
+        AND p.product_type = ofb.product_type
 WHERE
-    COALESCE(s.stock_on_hand, 0) != 0
-    OR COALESCE(s.asset_value, 0) != 0
+    (
+        COALESCE(s.stock_on_hand, 0)
+        + CASE
+            WHEN oh.product_id IS NULL THEN COALESCE(ofb.opening_qty, 0)
+            ELSE 0
+          END
+    ) != 0
+    OR (
+        COALESCE(s.asset_value, 0)
+        + CASE
+            WHEN oh.product_id IS NULL THEN COALESCE(ofb.opening_asset_value, 0)
+            ELSE 0
+          END
+    ) != 0
 ORDER BY p.product_name;
 `
 
@@ -86,6 +149,36 @@ WITH StockTotals AS (
       AND warehouse_id = @warehouseId
     GROUP BY product_id, product_type
 ),
+HasOpeningHist AS (
+    SELECT
+        product_id,
+        product_type
+    FROM stock_histories
+    WHERE business_id = @businessId
+      AND stock_date <= @currentDate
+      AND warehouse_id = @warehouseId
+      AND reference_type IN ('POS', 'PGOS', 'PCOS')
+    GROUP BY product_id, product_type
+),
+OpeningFallback AS (
+    SELECT
+        os.product_id,
+        os.product_type,
+        SUM(os.qty) AS opening_qty,
+        SUM(os.qty * os.unit_value) AS opening_asset_value
+    FROM opening_stocks os
+    LEFT JOIN products p
+        ON os.product_type = 'S'
+        AND p.id = os.product_id
+        AND p.business_id = @businessId
+    LEFT JOIN product_variants pv
+        ON os.product_type = 'V'
+        AND pv.id = os.product_id
+        AND pv.business_id = @businessId
+    WHERE (p.id IS NOT NULL OR pv.id IS NOT NULL)
+      AND os.warehouse_id = @warehouseId
+    GROUP BY os.product_id, os.product_type
+),
 AllProducts AS (
     SELECT
         id AS product_id,
@@ -108,8 +201,20 @@ AllProducts AS (
 SELECT
     p.product_id,
     p.product_type,
-    COALESCE(s.stock_on_hand, 0) as stock_on_hand,
-    COALESCE(s.asset_value, 0) as asset_value,
+    (
+        COALESCE(s.stock_on_hand, 0)
+        + CASE
+            WHEN oh.product_id IS NULL THEN COALESCE(ofb.opening_qty, 0)
+            ELSE 0
+          END
+    ) as stock_on_hand,
+    (
+        COALESCE(s.asset_value, 0)
+        + CASE
+            WHEN oh.product_id IS NULL THEN COALESCE(ofb.opening_asset_value, 0)
+            ELSE 0
+          END
+    ) as asset_value,
     p.product_name,
     p.product_unit_id,
     p.sku
@@ -117,9 +222,25 @@ FROM
     AllProducts p
     LEFT JOIN StockTotals s ON p.product_id = s.product_id
         AND p.product_type = s.product_type
+    LEFT JOIN HasOpeningHist oh ON p.product_id = oh.product_id
+        AND p.product_type = oh.product_type
+    LEFT JOIN OpeningFallback ofb ON p.product_id = ofb.product_id
+        AND p.product_type = ofb.product_type
 WHERE
-    COALESCE(s.stock_on_hand, 0) != 0
-    OR COALESCE(s.asset_value, 0) != 0
+    (
+        COALESCE(s.stock_on_hand, 0)
+        + CASE
+            WHEN oh.product_id IS NULL THEN COALESCE(ofb.opening_qty, 0)
+            ELSE 0
+          END
+    ) != 0
+    OR (
+        COALESCE(s.asset_value, 0)
+        + CASE
+            WHEN oh.product_id IS NULL THEN COALESCE(ofb.opening_asset_value, 0)
+            ELSE 0
+          END
+    ) != 0
 ORDER BY p.product_name;
 `
 
