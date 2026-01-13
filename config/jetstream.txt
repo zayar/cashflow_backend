@@ -1,0 +1,119 @@
+// package config
+
+// type NatsMessageType string
+
+// const (
+// 	NatsMessageTypeReconcile                    NatsMessageType = "RECO"
+// 	NatsMessageTypeCustomer                     NatsMessageType = "CUS"
+// 	NatsMessageTypeSalesOrder                   NatsMessageType = "SO"
+// 	NatsMessageTypeInvoice                      NatsMessageType = "IV"
+// 	NatsMessageTypeCustomerPayment              NatsMessageType = "CP"
+// 	NatsMessageTypeCreditNote                   NatsMessageType = "CN"
+// 	NatsMessageTypeSupplier                     NatsMessageType = "SUP"
+// 	NatsMessageTypeBill                         NatsMessageType = "BL"
+// 	NatsMessageTypeExpense                      NatsMessageType = "EP"
+// 	NatsMessageTypePurchaseOrder                NatsMessageType = "PO"
+// 	NatsMessageTypeSupplierPayment              NatsMessageType = "SP"
+// 	NatsMessageTypeSupplierCredit               NatsMessageType = "SC"
+// 	NatsMessageTypeJournal                      NatsMessageType = "JN"
+// 	NatsMessageTypeBankingTransaction           NatsMessageType = "BT"
+// 	NatsMessageTypeProductOpeningStock          NatsMessageType = "POS"
+// 	NatsMessageTypeProductGroupOpeningStock     NatsMessageType = "PGOS"
+// 	NatsMessageTypeProductCompositeOpeningStock NatsMessageType = "PCOS"
+// )
+
+// type NatsActionType string
+
+// const (
+// 	NatsActionTypeCreate NatsActionType = "C"
+// 	NatsActionTypeUpdate NatsActionType = "U"
+// 	NatsActionTypeDelete NatsActionType = "D"
+// )
+
+// type NatsMessage struct {
+// 	Id                  int             `json:"id"`
+// 	Type                NatsMessageType `json:"type"`
+// 	Action              NatsActionType  `json:"action"`
+// 	BusinessId          string          `json:"business_id"`
+// 	TransactionDateTime time.Time       `json:"transaction_date_time"`
+// 	ReferenceId         int             `json:"reference_id"`
+// 	ReferenceType       string          `json:"reference_type"`
+// 	NewObj              []byte          `json:"new_obj"`
+// 	OldObj              []byte          `json:"old_obj"`
+// }
+
+// var (
+// 	js nats.JetStreamContext
+// )
+
+// const (
+// 	SubjectPrefix = "ACC."
+// )
+
+// func GetJetstream() nats.JetStreamContext {
+// 	return js
+// }
+
+// func init() {
+// 	// Connect to NATS
+// 	nc, err := nats.Connect(nats.DefaultURL)
+// 	if err != nil {
+// 		panic(fmt.Errorf("nats connect %w", err))
+// 	}
+// 	// Create JetStream Context
+// 	js, err = nc.JetStream(nats.PublishAsyncMaxPending(256))
+// 	if err != nil {
+// 		panic(fmt.Errorf("jetstream: %w", err))
+// 	}
+// }
+
+// func AddStream(jetStream nats.JetStreamContext, streamName string) error {
+// 	stream, _ := jetStream.StreamInfo(streamName)
+
+// 	// stream not found, create it
+// 	if stream == nil {
+// 		_, err := jetStream.AddStream(&nats.StreamConfig{
+// 			Name:              streamName,
+// 			Subjects:          []string{SubjectPrefix + streamName},
+// 			Retention:         nats.WorkQueuePolicy,
+// 			Discard:           nats.DiscardOld,    // When the queue is full, discard old messages.
+// 			MaxAge:            7 * 24 * time.Hour, // 7 days
+// 			Storage:           nats.FileStorage,
+// 			MaxMsgsPerSubject: 100_000_000,
+// 			MaxMsgSize:        4 << 20, // 4 MB
+// 			NoAck:             false,
+// 		}, nats.Context(context.Background()))
+// 		if err != nil {
+// 			return err
+// 		}
+// 	}
+// 	return nil
+// }
+
+// func PublishAccountingWorkflow(businessId string, msg NatsMessage, obj any, oldObj any) error {
+// 	if msg.Action == NatsActionTypeCreate || msg.Action == NatsActionTypeUpdate {
+// 		objInByte, err := json.Marshal(obj)
+// 		if err != nil {
+// 			return err
+// 		}
+// 		msg.NewObj = objInByte
+// 	}
+// 	if msg.Action == NatsActionTypeUpdate || msg.Action == NatsActionTypeDelete {
+// 		oldObjInByte, err := json.Marshal(oldObj)
+// 		if err != nil {
+// 			return err
+// 		}
+// 		msg.OldObj = oldObjInByte
+// 	}
+
+// 	streamName := strings.ReplaceAll(businessId, "-", "")
+// 	msgJson, err := json.Marshal(msg)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	_, err = js.Publish(SubjectPrefix+streamName, msgJson, nats.ExpectStream(streamName))
+// 	if err != nil {
+// 		return err
+// 	}
+// 	return nil
+// }

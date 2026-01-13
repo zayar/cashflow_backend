@@ -1,0 +1,5219 @@
+# GraphQL schema example
+#
+# https://gqlgen.com/getting-started/
+directive @goField(
+  forceResolver: Boolean
+  name: String
+) on FIELD_DEFINITION | INPUT_FIELD_DEFINITION
+
+# new directive
+directive @auth on FIELD_DEFINITION
+
+scalar Time
+scalar UUID
+scalar Decimal
+scalar AccountDetailType
+scalar AccountMainType
+scalar AccountReferenceType
+scalar BillStatus
+scalar DecimalPlaces
+scalar DiscountType
+scalar FiscalYear
+scalar JournalTransactionType
+scalar MoneyAccountType
+scalar PaymentTerms
+scalar Precision
+scalar ProductType
+scalar PurchaseOrderStatus
+scalar ReportBasis
+scalar SalesOrderStatus
+scalar TaxType
+scalar UserRole
+scalar Upload
+scalar RecurringTerms
+scalar SupplierCreditStatus
+scalar SalesInvoiceStatus
+scalar CreditNoteStatus
+scalar TransferOrderStatus
+scalar InventoryAdjustmentStatus
+scalar InventoryAdjustmentType
+scalar BankingTransactionType
+scalar SupplierCreditApplyType
+scalar SupplierAdvanceStatus
+scalar CustomerCreditApplyType
+scalar CustomerAdvanceStatus
+scalar RefundReferenceType
+scalar MyDateString
+
+type AccountSummary {
+  accountId: Int!
+  accountName: String!
+  accountCode: String
+  accountMainType: String
+  code: String
+  debit: Decimal!
+  credit: Decimal!
+  balance: Decimal!
+  openingBalance: Decimal!
+  closingBalance: Decimal!
+}
+
+type AccountSummaryGroup {
+  accountMainType: String!
+  accountSummaries: [AccountSummary]!
+}
+
+type Account {
+  id: ID!
+  businessId: String!
+  accountNumber: String
+  currencyId: Int
+  branches: String
+  detailType: AccountDetailType!
+  mainType: AccountMainType!
+  name: String!
+  code: String
+  description: String
+  parentAccount: Account!
+  isActive: Boolean!
+  isSystemDefault: Boolean!
+  systemDefaultCode: String
+  recentTransactions: [AccountTransaction!] @goField(forceResolver: true)
+  accountClosingBalance: AccountCurrencyDailyBalance
+    @goField(forceResolver: true)
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewAccount {
+  accountNumber: String
+  currencyId: Int
+  branches: String
+  detailType: AccountDetailType!
+  mainType: AccountMainType!
+  name: String!
+  code: String
+  description: String
+  parentAccountId: Int!
+}
+
+type BankingAccount {
+  id: ID!
+  name: String!
+  code: String
+  detailType: AccountDetailType!
+  mainType: AccountMainType!
+  isActive: Boolean!
+  systemDefaultCode: String
+  currency: AllCurrency @goField(forceResolver: true)
+  accountNumber: String
+  description: String
+  branches: String
+  balance: Decimal
+  parentAccountId: Int
+  recentTransactions: [BankingTransaction] @goField(forceResolver: true)
+}
+
+type TotalSummary {
+  detailType: String!
+  currencySymbol: String!
+  totalBalance: Decimal!
+}
+
+type ListBankingAccountResponse {
+  listBankingAccount: [BankingAccount!]!
+  totalSummary: [TotalSummary!]!
+}
+
+type TrialBalance {
+  accountId: Int
+  accountMainType: String!
+  accountName: String!
+  accountCode: String!
+  debit: Decimal!
+  credit: Decimal!
+}
+
+type AccountCurrencyDailyBalance {
+  businessId: String!
+  accountId: Int
+  account: Account! @goField(forceResolver: true)
+  transactionDate: Time!
+  branch: AllBranch! @goField(forceResolver: true)
+  currency: AllCurrency! @goField(forceResolver: true)
+  debit: Decimal
+  credit: Decimal
+  balance: Decimal
+  runningBalance: Decimal
+}
+
+type AccountJournal {
+  id: ID!
+  businessId: String!
+  branch: AllBranch! @goField(forceResolver: true)
+  transactionDateTime: Time!
+  transactionNumber: String
+  transactionDetails: String
+  referenceNumber: String
+  customer: Customer
+  supplier: Supplier
+  referenceId: Int
+  referenceType: AccountReferenceType
+  accountTransactions: [AccountTransaction]
+  referenceData: AccountJournalReferenceUnion! @goField(forceResolver: true)
+}
+
+union AccountJournalReferenceUnion =
+    Journal
+  | SalesInvoice
+  | PaidInvoice
+  | CreditNote
+  | Bill
+  | SupplierPayment
+  | SupplierPaidBill
+
+# already add 'JN'/Journal,'IV'/SalesInvoice,'IP'/PaidInvoice,'CN'/CreditNote,'BL'/Bill,'SP'/SupplierPayment,BP'/SupplierPaidBill
+# need to add 'CNR','EP','IVT','IVA','WO','ACP','ASP','COB','SOB','OB'
+
+type AccountTransaction {
+  id: ID!
+  businessId: String
+  description: String
+  account: Account! @goField(forceResolver: true)
+  branch: AllBranch! @goField(forceResolver: true)
+  transactionDateTime: Time!
+  baseDebit: Decimal
+  baseCredit: Decimal
+  baseClosingBalance: Decimal
+  foreignCurrency: AllCurrency! @goField(forceResolver: true)
+  foreignDebit: Decimal
+  foreignCredit: Decimal
+  foreignClosingBalance: Decimal
+  exchangeRate: Decimal
+  realisedAmount: Decimal
+  accountJournal: AccountJournal! @goField(forceResolver: true)
+}
+
+type AccountJournalTransaction {
+  account: Account! @goField(forceResolver: true)
+  branch: AllBranch! @goField(forceResolver: true)
+  baseDebit: Decimal
+  baseCredit: Decimal
+}
+
+type DetailedGeneralLedgerReportConnection {
+  edges: [DetailedGeneralLedgerReportEdge!]!
+  pageInfo: PageInfo!
+}
+
+type DetailedGeneralLedgerReportEdge {
+  cursor: String!
+  node: DetailedGeneralLedger
+}
+
+type DetailedGeneralLedger {
+  accountId: Int
+  accountName: String!
+  currencyId: Int!
+  currencyName: String!
+  currencySymbol: String!
+  openingBalance: Decimal!
+  openingBalanceDate: Time!
+  closingBalance: Decimal!
+  closingBalanceDate: Time!
+  transactions: [DetailLedgerTransaction]!
+}
+
+type DetailLedgerTransaction {
+  accountId: Int
+  accountName: String!
+  branchId: Int
+  transactionDateTime: Time!
+  description: String
+  debit: Decimal!
+  credit: Decimal!
+  foreignDebit: Decimal!
+  foreignCredit: Decimal!
+  exchangeRate: Decimal!
+  transactionType: String!
+  transactionNumber: String!
+  transactionDetails: String
+  referenceNumber: String
+  customerName: String!
+  supplierName: String!
+  foreignCurrencyName: String
+  foreignCurrencySymbol: String
+}
+
+type BalanceSheet {
+  accountMainType: String!
+  accountGroupType: String!
+  accountSubType: String!
+  accountName: String!
+  parentAccountName: String!
+  accountId: Int!
+  amount: Decimal!
+}
+
+type SubAccount {
+  accountName: String!
+  accountId: Int!
+  parentAccountName: String!
+  amount: Decimal!
+}
+
+type SubType {
+  accountName: String!
+  accountId: Int!
+  parentAccountName: String!
+  total: Decimal!
+  amount: Decimal!
+  subAccounts: [SubAccount]!
+}
+
+type GroupType {
+  subType: String!
+  total: Decimal!
+  accounts: [SubType]
+}
+
+type MainType {
+  groupType: String!
+  total: Decimal!
+  accounts: [GroupType]
+}
+
+type BalanceSheetResponse {
+  mainType: String!
+  total: Decimal
+  accounts: [MainType]
+}
+
+type ProfitAndLossResponse {
+  grossProfit: Decimal!
+  operatingProfit: Decimal!
+  netProfit: Decimal!
+  plAccountGroups: [PlAccountGroup!]!
+}
+
+type PlAccountGroup {
+  groupType: String!
+  total: Decimal!
+  accounts: [AccountGroupItem!]!
+}
+
+type AccountGroupItem {
+  mainType: String!
+  detailType: String!
+  accountName: String!
+  accountId: Int!
+  amount: Decimal!
+}
+
+type CashFlowResponse {
+  beginCashBalance: Decimal!
+  netChange: Decimal!
+  endCashBalance: Decimal!
+  cashAccountGroups: [CashAccountGroup!]!
+}
+
+type CashAccountGroup {
+  groupName: String!
+  total: Decimal!
+  accounts: [GroupItem!]!
+}
+
+type GroupItem {
+  accountName: String!
+  accountCode: String!
+  accountID: Int!
+  amount: Decimal!
+}
+
+type MovementOfEquityResponse {
+  openingBalance: Decimal!
+  netChange: Decimal!
+  closingBalance: Decimal!
+  accountGroups: [CashAccountGroup!]!
+}
+
+type Bill {
+  id: ID!
+  businessId: String!
+  supplier: Supplier!
+  branch: AllBranch! @goField(forceResolver: true)
+  purchaseOrderNumber: String
+  billNumber: String!
+  referenceNumber: String
+  billDate: Time!
+  billDueDate: Time
+  billPaymentTerms: PaymentTerms!
+  billPaymentTermsCustomDays: Int
+  billSubject: String
+  notes: String
+  currency: AllCurrency! @goField(forceResolver: true)
+  exchangeRate: Decimal
+  billDiscount: Decimal
+  billDiscountType: DiscountType
+  billDiscountAmount: Decimal
+  adjustmentAmount: Decimal
+  isTaxInclusive: Boolean!
+  billTax: TaxInfo
+  billTaxAmount: Decimal
+  currentStatus: BillStatus!
+  documents: [Document] @goField(forceResolver: true)
+  details: [BillDetail] @goField(forceResolver: true)
+  purchaseOrder: PurchaseOrder @goField(forceResolver: true)
+  billPayment: [BillPayment] @goField(forceResolver: true)
+  warehouse: AllWarehouse! @goField(forceResolver: true)
+  billSubtotal: Decimal
+  billTotalDiscountAmount: Decimal
+  billTotalTaxAmount: Decimal
+  billTotalAmount: Decimal
+  billTotalPaidAmount: Decimal
+  billTotalCreditUsedAmount: Decimal
+  billTotalAdvanceUsedAmount: Decimal
+  remainingBalance: Decimal
+  balanceDue: Decimal! @goField(forceResolver: true)
+  appliedSupplierCredits: [SupplierCreditBill] @goField(forceResolver: true)
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewBill {
+  branchId: Int!
+  supplierId: Int!
+  purchaseOrderNumber: String
+  referenceNumber: String
+  billDate: Time!
+  billPaymentTerms: PaymentTerms!
+  billPaymentTermsCustomDays: Int
+  billSubject: String
+  notes: String
+  currencyId: Int!
+  exchangeRate: Decimal
+  billDiscount: Decimal
+  billDiscountType: DiscountType
+  adjustmentAmount: Decimal
+  isTaxInclusive: Boolean!
+  billTaxId: Int
+  billTaxType: TaxType
+  currentStatus: BillStatus!
+  documents: [NewDocument]
+  warehouseId: Int
+  details: [NewBillDetail!]!
+}
+
+type BillDetail {
+  id: ID!
+  billId: Int!
+  product: AllProduct! @goField(forceResolver: true)
+  productId: Int
+  productType: ProductType
+  batchNumber: String
+  name: String!
+  description: String
+  detailAccount: AllAccount! @goField(forceResolver: true)
+  customerId: Int
+  detailQty: Decimal!
+  detailUnitRate: Decimal!
+  detailTax: TaxInfo
+  detailDiscount: Decimal!
+  detailDiscountType: DiscountType
+  detailDiscountAmount: Decimal!
+  detailTaxAmount: Decimal!
+  detailTotalAmount: Decimal!
+  purchaseOrderItemId: Int
+}
+
+input NewBillDetail {
+  detailId: Int
+  productId: Int
+  productType: ProductType
+  batchNumber: String
+  name: String!
+  description: String
+  detailAccountId: Int
+  customerId: Int
+  detailQty: Decimal!
+  detailUnitRate: Decimal!
+  detailTaxId: Int
+  detailTaxType: TaxType
+  detailDiscount: Decimal!
+  detailDiscountType: DiscountType
+  isDeletedItem: Boolean
+  purchaseOrderItemId: Int
+}
+
+type BillPayment {
+  paymentDate: Time!
+  paymentNumber: String!
+  referenceNumber: String!
+  amount: Decimal!
+  paymentMode: String!
+}
+
+type BillsConnection {
+  edges: [BillsEdge!]!
+  billTotalSummary: BillTotalSummary @goField(forceResolver: true)
+  pageInfo: PageInfo!
+}
+
+type BillsEdge {
+  cursor: String!
+  node: Bill
+}
+
+type BillTotalSummary {
+  totalOutstandingPayable: Decimal!
+  dueToday: Decimal!
+  dueWithin30Days: Decimal!
+  totalOverdue: Decimal!
+}
+
+type RecurringBill {
+  id: ID!
+  businessId: String!
+  supplier: Supplier!
+  branch: AllBranch! @goField(forceResolver: true)
+  profileName: String!
+  repeatTimes: Int!
+  repeatTerms: RecurringTerms!
+  startDate: Time!
+  endDate: Time
+  isNeverExpired: Boolean
+  billPaymentTerms: PaymentTerms!
+  billPaymentTermsCustomDays: Int
+  notes: String
+  currency: AllCurrency! @goField(forceResolver: true)
+  billDiscount: Decimal
+  billDiscountType: DiscountType
+  billDiscountAmount: Decimal
+  adjustmentAmount: Decimal
+  isTaxInclusive: Boolean!
+  billTax: TaxInfo
+  billTaxAmount: Decimal
+  billSubtotal: Decimal
+  billTotalDiscountAmount: Decimal
+  billTotalTaxAmount: Decimal
+  billTotalAmount: Decimal
+  details: [RecurringBillDetail] @goField(forceResolver: true)
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewRecurringBill {
+  branchId: Int!
+  supplierId: Int!
+  profileName: String!
+  repeatTimes: Int!
+  repeatTerms: RecurringTerms!
+  startDate: Time!
+  endDate: Time
+  isNeverExpired: Boolean
+  billPaymentTerms: PaymentTerms!
+  billPaymentTermsCustomDays: Int
+  notes: String
+  currencyId: Int!
+  billDiscount: Decimal
+  billDiscountType: DiscountType
+  adjustmentAmount: Decimal
+  isTaxInclusive: Boolean!
+  billTaxId: Int
+  billTaxType: TaxType
+  details: [NewRecurringBillDetail!]!
+}
+
+type RecurringBillDetail {
+  id: ID!
+  recurringBillId: Int!
+  productId: Int
+  productType: ProductType
+  name: String!
+  description: String
+  detailAccount: AllAccount! @goField(forceResolver: true)
+  detailCustomerId: Int
+  detailQty: Decimal!
+  detailUnitRate: Decimal!
+  detailTax: TaxInfo
+  detailDiscount: Decimal!
+  detailDiscountType: DiscountType
+  detailDiscountAmount: Decimal!
+  detailTaxAmount: Decimal!
+  detailTotalAmount: Decimal!
+}
+
+input NewRecurringBillDetail {
+  detailId: Int
+  productId: Int
+  productType: ProductType
+  name: String!
+  description: String
+  detailAccountId: Int
+  detailCustomerId: Int
+  detailQty: Decimal!
+  detailUnitRate: Decimal!
+  detailTaxId: Int
+  detailTaxType: TaxType
+  detailDiscount: Decimal!
+  detailDiscountType: DiscountType
+  isDeletedItem: Boolean
+}
+
+type RecurringBillsConnection {
+  edges: [RecurringBillsEdge!]!
+  pageInfo: PageInfo!
+}
+
+type RecurringBillsEdge {
+  cursor: String!
+  node: RecurringBill
+}
+
+type SupplierPayment {
+  id: ID!
+  businessId: String!
+  supplier: Supplier!
+  branch: AllBranch! @goField(forceResolver: true)
+  currency: AllCurrency! @goField(forceResolver: true)
+  exchangeRate: Decimal
+  amount: Decimal!
+  bankCharges: Decimal
+  paymentDate: Time!
+  paymentNumber: String!
+  paymentMode: AllPaymentMode @goField(forceResolver: true)
+  withdrawAccount: AllAccount @goField(forceResolver: true)
+  referenceNumber: String
+  notes: String
+  documents: [Document] @goField(forceResolver: true)
+  paidBills: [SupplierPaidBill] @goField(forceResolver: true)
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewSupplierPayment {
+  branchId: Int!
+  supplierId: Int!
+  currencyId: Int!
+  exchangeRate: Decimal
+  amount: Decimal!
+  bankCharges: Decimal
+  paymentDate: Time!
+  paymentModeId: Int
+  withdrawAccountId: Int!
+  referenceNumber: String
+  notes: String
+  documents: [NewDocument]
+  paidBills: [NewPaidBill!]!
+}
+
+type SupplierPaidBill {
+  id: ID!
+  supplierPaymentId: Int!
+  bill: Bill!
+  paidAmount: Decimal!
+}
+
+input NewPaidBill {
+  paidBillId: Int
+  billId: Int!
+  paidAmount: Decimal!
+}
+
+type SupplierCredit {
+  id: ID!
+  businessId: String!
+  supplier: Supplier!
+  branch: AllBranch! @goField(forceResolver: true)
+  supplierCreditNumber: String!
+  referenceNumber: String
+  supplierCreditDate: Time!
+  supplierCreditSubject: String
+  notes: String
+  currency: AllCurrency! @goField(forceResolver: true)
+  exchangeRate: Decimal
+  warehouse: AllWarehouse! @goField(forceResolver: true)
+  supplierCreditDiscount: Decimal
+  supplierCreditDiscountType: DiscountType
+  supplierCreditDiscountAmount: Decimal
+  adjustmentAmount: Decimal
+  isTaxInclusive: Boolean!
+  supplierCreditTax: TaxInfo
+  supplierCreditTaxAmount: Decimal
+  currentStatus: SupplierCreditStatus!
+  documents: [Document] @goField(forceResolver: true)
+  details: [SupplierCreditDetail] @goField(forceResolver: true)
+  supplierCreditSubtotal: Decimal
+  supplierCreditTotalDiscountAmount: Decimal
+  supplierCreditTotalTaxAmount: Decimal
+  supplierCreditTotalAmount: Decimal
+  supplierCreditTotalUsedAmount: Decimal
+  supplierCreditTotalRefundAmount: Decimal
+  remainingBalance: Decimal
+  creditedBills: [SupplierCreditBill] @goField(forceResolver: true)
+  refunds: [Refund]
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewSupplierCredit {
+  branchId: Int!
+  supplierId: Int!
+  warehouseId: Int!
+  referenceNumber: String
+  supplierCreditDate: Time!
+  supplierCreditSubject: String
+  notes: String
+  currencyId: Int!
+  exchangeRate: Decimal
+  supplierCreditDiscount: Decimal
+  supplierCreditDiscountType: DiscountType
+  adjustmentAmount: Decimal
+  isTaxInclusive: Boolean!
+  supplierCreditTaxId: Int
+  supplierCreditTaxType: TaxType
+  currentStatus: SupplierCreditStatus!
+  documents: [NewDocument]
+  details: [NewSupplierCreditDetail!]!
+}
+
+type SupplierCreditDetail {
+  id: ID!
+  supplierCreditId: Int!
+  product: AllProduct! @goField(forceResolver: true)
+  productId: Int
+  productType: ProductType
+  batchNumber: String
+  name: String!
+  description: String
+  detailAccount: AllAccount! @goField(forceResolver: true)
+  detailQty: Decimal!
+  detailUnitRate: Decimal!
+  detailTax: TaxInfo
+  detailDiscount: Decimal!
+  detailDiscountType: DiscountType
+  detailDiscountAmount: Decimal!
+  detailTaxAmount: Decimal!
+  detailTotalAmount: Decimal!
+}
+
+input NewSupplierCreditDetail {
+  detailId: Int
+  productId: Int
+  productType: ProductType
+  batchNumber: String
+  name: String!
+  description: String
+  detailAccountId: Int
+  detailQty: Decimal!
+  detailUnitRate: Decimal!
+  detailTaxId: Int
+  detailTaxType: TaxType
+  detailDiscount: Decimal!
+  detailDiscountType: DiscountType
+  isDeletedItem: Boolean
+}
+
+type BillingAddress {
+  id: ID!
+  attention: String
+  address: String
+  country: String
+  city: String
+  state: AllState @goField(forceResolver: true)
+  township: AllTownship @goField(forceResolver: true)
+  phone: String
+  mobile: String
+  email: String
+  referenceType: String
+  referenceID: Int
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewBillingAddress {
+  attention: String
+  address: String
+  country: String
+  city: String
+  stateId: Int
+  townshipId: Int
+  phone: String
+  mobile: String
+  email: String
+}
+
+type Branch {
+  id: ID!
+  businessId: String!
+  transactionNumberSeries: TransactionNumberSeries!
+  name: String!
+  phone: String
+  mobile: String
+  address: String
+  country: String
+  city: String
+  state: AllState @goField(forceResolver: true)
+  township: AllTownship @goField(forceResolver: true)
+  isActive: Boolean!
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewBranch {
+  transactionNumberSeriesId: Int!
+  name: String!
+  phone: String
+  mobile: String
+  address: String
+  country: String
+  city: String
+  stateId: Int
+  townshipId: Int
+}
+
+type Business {
+  id: UUID!
+  logoUrl: String
+  name: String!
+  contactName: String
+  email: String
+  phone: String
+  mobile: String
+  website: String
+  about: String
+  address: String
+  country: String
+  city: String
+  state: AllState @goField(forceResolver: true)
+  township: AllTownship @goField(forceResolver: true)
+  baseCurrency: AllCurrency! @goField(forceResolver: true)
+  fiscalYear: FiscalYear!
+  reportBasis: ReportBasis!
+  timezone: String
+  companyId: String
+  taxId: String
+  isTaxInclusive: Boolean
+  isTaxExclusive: Boolean
+  primaryBranch: AllBranch! @goField(forceResolver: true)
+  isActive: Boolean!
+  migrationDate: Time!
+  salesTransactionLockDate: Time!
+  purchaseTransactionLockDate: Time!
+  bankingTransactionLockDate: Time!
+  accountantTransactionLockDate: Time!
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewBusiness {
+  logo_url: String
+  name: String!
+  contactName: String
+  email: String!
+  phone: String
+  mobile: String
+  website: String
+  about: String
+  address: String
+  country: String
+  city: String
+  stateId: Int
+  townshipId: Int
+  baseCurrencyId: Int
+  fiscalYear: FiscalYear
+  reportBasis: ReportBasis
+  timezone: String
+  companyId: String
+  taxId: String
+  migrationDate: Time
+}
+
+type OpeningBalance {
+  id: ID!
+  businessId: String!
+  branch: AllBranch! @goField(forceResolver: true)
+  migrationDate: Time!
+  details: [OpeningBalanceDetail]
+}
+
+type OpeningBalanceDetail {
+  id: ID!
+  openingBalanceId: Int!
+  account: AllAccount! @goField(forceResolver: true)
+  debit: Decimal
+  credit: Decimal
+}
+
+input NewOpeningBalance {
+  migrationDate: Time!
+  branchId: Int!
+  details: [NewOpeningBalanceDetail]
+}
+
+input NewOpeningBalanceDetail {
+  detailId: ID
+  accountId: Int!
+  debit: Decimal
+  credit: Decimal
+}
+
+type PayableOpeningBalanceDetail {
+  supplierId: Int!
+  supplierName: String
+  debitFCY: Decimal!
+  creditFCY: Decimal!
+  exchangeRate: Decimal!
+  debit: Decimal!
+  credit: Decimal!
+  foreignCurrencySymbol: String!
+  decimalPlaces: DecimalPlaces!
+}
+
+type ReceivableOpeningBalanceDetail {
+  customerId: Int!
+  customerName: String
+  debitFCY: Decimal!
+  creditFCY: Decimal!
+  exchangeRate: Decimal!
+  debit: Decimal!
+  credit: Decimal!
+  foreignCurrencySymbol: String!
+  decimalPlaces: DecimalPlaces!
+}
+
+type StockOpeningBalanceDetail {
+  warehouseId: Int!
+  warehouseName: String
+  productId: Int!
+  productName: String
+  productType: String!
+  batchNumber: String!
+  qty: Decimal!
+  unitValue: Decimal!
+  totalValue: Decimal!
+  # currencySymbol: String!
+  # decimalPlaces: DecimalPlaces!
+}
+
+type TransactionLockingRecord {
+  id: ID!
+  businessId: String!
+  salesTransactionLockDate: Time!
+  purchaseTransactionLockDate: Time!
+  bankingTransactionLockDate: Time!
+  accountantTransactionLockDate: Time!
+  reason: String!
+  userId: Int
+  userName: String
+  createdAt: Time
+}
+
+input NewTransactionLocking {
+  salesTransactionLockDate: Time!
+  purchaseTransactionLockDate: Time!
+  bankingTransactionLockDate: Time!
+  accountantTransactionLockDate: Time!
+  reason: String!
+}
+
+input NewTaxSetting {
+  isTaxInclusive: Boolean!
+  isTaxExclusive: Boolean!
+}
+
+type Comment {
+  id: ID!
+  businessId: String!
+  description: String!
+  referenceId: Int
+  referenceType: String
+  userId: Int
+  userName: String
+  createdAt: Time
+}
+
+input NewComment {
+  description: String!
+  referenceId: Int
+  referenceType: String
+}
+
+type ContactPerson {
+  id: ID!
+  name: String
+  email: String
+  phone: String
+  mobile: String
+  designation: String
+  department: String
+  referenceType: String
+  referenceID: Int
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewContactPerson {
+  id: Int
+  isDeletedItem: Boolean
+  name: String
+  email: String
+  phone: String
+  mobile: String
+  designation: String
+  department: String
+}
+
+type Currency {
+  id: ID!
+  businessId: String!
+  symbol: String!
+  name: String!
+  decimalPlaces: DecimalPlaces!
+  isActive: Boolean!
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewCurrency {
+  symbol: String!
+  name: String!
+  decimalPlaces: DecimalPlaces!
+}
+
+type Customer {
+  id: ID!
+  businessId: String!
+  name: String!
+  email: String
+  phone: String
+  mobile: String
+  currency: AllCurrency! @goField(forceResolver: true)
+  customerTax: TaxInfo
+  openingBalanceBranchId: Int
+  openingBalance: Decimal
+  exchangeRate: Decimal
+  customerPaymentTerms: PaymentTerms
+  customerPaymentTermsCustomDays: Int
+  notes: String
+  creditLimit: Decimal
+  billingAddress: BillingAddress @goField(forceResolver: true)
+  shippingAddress: ShippingAddress @goField(forceResolver: true)
+  contactPersons: [ContactPerson] @goField(forceResolver: true)
+  documents: [Document] @goField(forceResolver: true)
+  availableCredits: [CreditNote] @goField(forceResolver: true)
+  availableAdvances: [CustomerCreditAdvance] @goField(forceResolver: true)
+  unpaidInvoices: [SalesInvoice!] @goField(forceResolver: true)
+  paidInvoices: [SalesInvoice!] @goField(forceResolver: true)
+  isActive: Boolean!
+  totalOutstandingReceivable: Decimal! @goField(forceResolver: true)
+  totalOutstandingCredit: Decimal! @goField(forceResolver: true)
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewCustomer {
+  name: String!
+  email: String
+  phone: String
+  mobile: String
+  currencyId: Int!
+  customerTaxId: Int
+  customerTaxType: TaxType
+  exchangeRate: Decimal
+  openingBalanceBranchId: Int
+  openingBalance: Decimal
+  customerPaymentTerms: PaymentTerms
+  customerPaymentTermsCustomDays: Int
+  notes: String
+  creditLimit: Decimal
+  billingAddress: NewBillingAddress
+  shippingAddress: NewShippingAddress
+  contactPersons: [NewContactPerson]
+  documents: [NewDocument]
+}
+type CustomersConnection {
+  edges: [CustomersEdge!]!
+  pageInfo: PageInfo!
+}
+
+type CustomersEdge {
+  cursor: String!
+  node: Customer
+}
+
+type Document {
+  id: ID!
+  documentUrl: String!
+  referenceType: String
+  referenceID: Int
+  # referenceData: ReferenceDataUnion! @goField(forceResolver: true)
+}
+
+union ReferenceDataUnion = Bill | SalesInvoice
+
+input NewDocument {
+  id: Int
+  isDeletedItem: Boolean
+  documentUrl: String!
+}
+
+type DeliveryMethod {
+  id: ID!
+  businessId: String!
+  name: String!
+  isActive: Boolean!
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewDeliveryMethod {
+  name: String!
+}
+
+type Expense {
+  id: ID!
+  businessId: String!
+  expenseAccount: AllAccount! @goField(forceResolver: true)
+  assetAccount: AllAccount! @goField(forceResolver: true)
+  branch: AllBranch! @goField(forceResolver: true)
+  expenseDate: Time!
+  currency: AllCurrency! @goField(forceResolver: true)
+  exchangeRate: Decimal!
+  amount: Decimal!
+  bankCharges: Decimal
+  taxAmount: Decimal
+  totalAmount: Decimal!
+  supplier: Supplier
+  customer: Customer
+  expenseNumber: String!
+  referenceNumber: String
+  notes: String
+  expenseTax: TaxInfo
+  isTaxInclusive: Boolean!
+  documents: [Document] @goField(forceResolver: true)
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewExpense {
+  expenseAccountId: Int!
+  assetAccountId: Int!
+  branchId: Int!
+  expenseDate: Time!
+  currencyId: Int!
+  exchangeRate: Decimal!
+  amount: Decimal!
+  bankCharges: Decimal
+  supplierId: Int
+  customerId: Int
+  referenceNumber: String
+  notes: String
+  expenseTaxId: Int
+  expenseTaxType: TaxType
+  isTaxInclusive: Boolean!
+  documents: [NewDocument]
+}
+
+type ExpensesConnection {
+  edges: [ExpensesEdge!]!
+  pageInfo: PageInfo!
+}
+
+type ExpensesEdge {
+  cursor: String!
+  node: Expense
+}
+
+type History {
+  id: ID!
+  businessId: String!
+  actionType: String!
+  before: String
+  after: String
+  description: String
+  referenceId: Int
+  referenceType: String
+  userId: Int
+  userName: String
+  createdAt: Time
+}
+
+input NewHistory {
+  actionType: String!
+  before: String
+  after: String
+  description: String
+  referenceId: Int
+  referenceType: String
+}
+
+type HistoriesConnection {
+  edges: [HistoriesEdge!]!
+  pageInfo: PageInfo!
+}
+
+type HistoriesEdge {
+  cursor: String!
+  node: History
+}
+
+type Image {
+  id: ID!
+  imageUrl: String!
+  thumbnailUrl: String!
+  referenceType: String
+  referenceID: Int
+}
+
+input NewImage {
+  id: ID
+  isDeletedItem: Boolean
+  imageUrl: String!
+  thumbnailUrl: String!
+}
+
+type Journal {
+  id: ID!
+  businessId: String!
+  branch: AllBranch! @goField(forceResolver: true)
+  journalNumber: String!
+  referenceNumber: String
+  journalDate: Time!
+  journalNotes: String!
+  currency: AllCurrency! @goField(forceResolver: true)
+  exchangeRate: Decimal!
+  supplier: Supplier
+  customer: Customer
+  journalTotalAmount: Decimal!
+  transactions: [JournalTransaction]
+  documents: [Document] @goField(forceResolver: true)
+  createdAt: Time
+  updatedAt: Time
+}
+
+type JournalTransaction {
+  id: ID!
+  journalId: Int!
+  account: AllAccount! @goField(forceResolver: true)
+  description: String
+  debit: Decimal!
+  credit: Decimal!
+}
+
+input NewJournal {
+  branchId: Int!
+  # journalNumber: String!
+  referenceNumber: String
+  journalDate: Time!
+  journalNotes: String!
+  # transactionType: JournalTransactionType!
+  currencyId: Int!
+  exchangeRate: Decimal!
+  supplierId: Int
+  customerId: Int
+  transactions: [NewJournalTransaction]
+  documents: [NewDocument]
+}
+
+input NewJournalTransaction {
+  accountId: Int!
+  description: String
+  debit: Decimal!
+  credit: Decimal!
+}
+
+type JournalsConnection {
+  edges: [JournalsEdge!]!
+  pageInfo: PageInfo!
+}
+
+type JournalsEdge {
+  cursor: String!
+  node: Journal
+}
+
+type JournalReportConnection {
+  edges: [JournalReportEdge!]!
+  pageInfo: PageInfo!
+}
+
+type JournalReportEdge {
+  cursor: String!
+  node: AccountJournal
+}
+
+type AccountTransactionReportConnection {
+  edges: [AccountTransactionReportEdge!]!
+  pageInfo: PageInfo!
+}
+
+type AccountTransactionReportEdge {
+  cursor: String!
+  node: AccountTransaction
+}
+
+type Module {
+  id: ID!
+  businessId: String!
+  name: String!
+  actions: String!
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewModule {
+  name: String!
+  actions: String!
+  businessId: String!
+}
+
+type AllModule {
+  id: ID!
+  name: String!
+  actions: String!
+}
+
+type BaseModule {
+  baseModuleName: String!
+  modules: [AllModule]
+}
+
+type MoneyAccount {
+  id: ID!
+  businessId: String!
+  accountType: MoneyAccountType!
+  accountName: String!
+  accountCode: String
+  accountCurrency: AllCurrency! @goField(forceResolver: true)
+  accountNumber: String
+  bankName: String
+  routingNumber: String
+  branches: String
+  description: String
+  currentBaseBalance: Decimal
+  currentForeignBalance: Decimal
+  isActive: Boolean!
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewMoneyAccount {
+  accountType: MoneyAccountType!
+  accountName: String!
+  accountCode: String
+  accountCurrencyId: Int!
+  accountNumber: String
+  bankName: String
+  routingNumber: String
+  branches: String
+  description: String
+}
+
+type MoneyAccountsConnection {
+  edges: [MoneyAccountsEdge!]!
+  pageInfo: PageInfo!
+}
+
+type MoneyAccountsEdge {
+  cursor: String!
+  node: MoneyAccount
+}
+
+type PaymentMode {
+  id: ID!
+  businessId: String!
+  name: String!
+  isActive: Boolean!
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewPaymentMode {
+  name: String!
+}
+
+type Product {
+  id: ID!
+  businessId: String!
+  name: String!
+  description: String
+  sku: String
+  category: AllProductCategory! @goField(forceResolver: true)
+  modifiers: [ProductModifier] @goField(forceResolver: true)
+  images: [Image] @goField(forceResolver: true)
+  productUnit: AllProductUnit! @goField(forceResolver: true)
+  supplier: Supplier
+  barcode: String
+  salesPrice: Decimal!
+  salesAccount: AllAccount! @goField(forceResolver: true)
+  salesTax: TaxInfo
+  isSalesTaxInclusive: Boolean!
+  purchasePrice: Decimal!
+  purchaseAccount: AllAccount! @goField(forceResolver: true)
+  purchaseTax: TaxInfo
+  inventoryAccount: AllAccount! @goField(forceResolver: true)
+  isActive: Boolean!
+  isBatchTracking: Boolean
+  externalSystemId: String
+  stockInHand: Decimal
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewProduct {
+  name: String!
+  description: String
+  sku: String
+  categoryId: Int
+  modifiers: [NewProductLinkModifier]
+  images: [NewImage]
+  unitId: Int!
+  supplierId: Int
+  barcode: String
+  salesPrice: Decimal
+  salesAccountId: Int
+  salesTaxId: Int
+  salesTaxType: TaxType
+  isSalesTaxInclusive: Boolean
+  purchasePrice: Decimal
+  purchaseAccountId: Int
+  purchaseTaxId: Int
+  purchaseTaxType: TaxType
+  inventoryAccountId: Int
+  openingStocks: [NewOpeningStock]
+  isBatchTracking: Boolean
+}
+
+input NewOpeningStock {
+  warehouseId: Int!
+  batchNumber: String
+  qty: Decimal!
+  unitValue: Decimal!
+}
+
+type ProductsConnection {
+  edges: [ProductsEdge!]!
+  pageInfo: PageInfo!
+}
+
+type ProductsEdge {
+  cursor: String!
+  node: Product
+}
+
+type AllProduct {
+  id: String!
+  name: String!
+  sku: String
+  barcode: String
+  salesPrice: Decimal!
+  purchasePrice: Decimal!
+  salesTax: TaxInfo
+  purchaseTax: TaxInfo
+  purchaseAccount: AllAccount @goField(forceResolver: true)
+  salesAccount: AllAccount @goField(forceResolver: true)
+  inventoryAccount: AllAccount @goField(forceResolver: true)
+  productUnit: AllProductUnit @goField(forceResolver: true)
+  isActive: Boolean!
+  isBatchTracking: Boolean
+}
+
+type ProductStock {
+  warehouseId: Int
+  description: String
+  productId: Int
+  productType: ProductType
+  batchNumber: String
+  receivedDate: Time
+  qty: Decimal!
+  currentQty: Decimal
+}
+
+input NewProductLinkModifier {
+  modifierId: Int!
+}
+
+type ProductGroup {
+  id: ID!
+  businessId: String!
+  name: String!
+  description: String
+  category: AllProductCategory! @goField(forceResolver: true)
+  variants: [ProductVariant] @goField(forceResolver: true)
+  modifiers: [ProductModifier] @goField(forceResolver: true)
+  options: [ProductOption]
+  images: [Image] @goField(forceResolver: true)
+  supplier: Supplier
+  isActive: Boolean!
+  isBatchTracking: Boolean
+  externalSystemId: String
+  stockInHand: Decimal
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewProductGroup {
+  name: String!
+  description: String
+  categoryId: Int
+  variants: [NewProductVariant]
+  modifiers: [NewProductGroupLinkModifier]
+  options: [NewProductOption]
+  images: [NewImage]
+  supplierId: Int
+  isBatchTracking: Boolean
+}
+
+input NewOpeningStockGroup {
+  productVariantId: Int!
+  warehouseId: Int!
+  batchNumber: String
+  qty: Decimal!
+  unitValue: Decimal!
+}
+
+type ProductGroupsConnection {
+  edges: [ProductGroupsEdge!]!
+  pageInfo: PageInfo!
+}
+
+type ProductGroupsEdge {
+  cursor: String!
+  node: ProductGroup
+}
+
+input NewProductGroupLinkModifier {
+  modifierId: Int!
+}
+
+type ProductCategory {
+  id: ID!
+  businessId: String!
+  name: String!
+  parentCategory: ProductCategory!
+  isActive: Boolean!
+  products: [Product!]!
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewProductCategory {
+  name: String!
+  parentCategoryId: Int
+}
+
+type ProductCategoriesConnection {
+  edges: [ProductCategoriesEdge!]!
+  pageInfo: PageInfo!
+}
+
+type ProductCategoriesEdge {
+  cursor: String!
+  node: ProductCategory
+}
+
+type ProductModifier {
+  id: ID!
+  businessId: String!
+  name: String!
+  modifierUnits: [ProductModifierUnit]
+  isActive: Boolean!
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewProductModifier {
+  name: String!
+  modifierUnits: [NewProductModifierUnit]
+}
+
+type ProductModifiersConnection {
+  edges: [ProductModifiersEdge!]!
+  pageInfo: PageInfo!
+}
+
+type ProductModifiersEdge {
+  cursor: String!
+  node: ProductModifier
+}
+
+type ProductModifierUnit {
+  modifierId: Int!
+  unitName: String!
+  price: Decimal!
+}
+
+input NewProductModifierUnit {
+  unitName: String!
+  price: Decimal!
+}
+
+type ProductOption {
+  id: Int!
+  productGroupId: Int!
+  optionName: String!
+  optionUnits: String!
+}
+
+input NewProductOption {
+  ID: Int
+  optionName: String!
+  optionUnits: String!
+}
+
+type ProductUnit {
+  id: ID!
+  businessId: String!
+  name: String!
+  abbreviation: String!
+  precision: Precision!
+  isActive: Boolean!
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewProductUnit {
+  name: String!
+  abbreviation: String!
+  precision: Precision!
+}
+
+type AllProductCategory {
+  id: ID!
+  name: String!
+  isActive: Boolean!
+}
+
+type AllProductModifier {
+  id: ID!
+  name: String!
+  # modifierUnits: [ProductModifierUnit]
+  isActive: Boolean!
+}
+
+type AllProductUnit {
+  id: ID!
+  name: String!
+  abbreviation: String!
+  precision: Precision!
+  isActive: Boolean!
+}
+
+type ProductUnitsConnection {
+  edges: [ProductUnitsEdge!]!
+  pageInfo: PageInfo!
+}
+
+type ProductUnitsEdge {
+  cursor: String!
+  node: ProductUnit
+}
+
+type ProductVariant {
+  ID: ID!
+  businessId: String!
+  productGroupId: Int!
+  name: String!
+  sku: String
+  barcode: String
+  salesPrice: Decimal!
+  salesAccount: AllAccount! @goField(forceResolver: true)
+  salesTax: TaxInfo
+  isSalesTaxInclusive: Boolean!
+  purchasePrice: Decimal!
+  purchaseAccount: AllAccount! @goField(forceResolver: true)
+  productUnit: AllProductUnit! @goField(forceResolver: true)
+  purchaseTax: TaxInfo
+  inventoryAccount: AllAccount! @goField(forceResolver: true)
+  isActive: Boolean!
+  externalSystemId: String
+  stockInHand: Decimal @goField(forceResolver: true)
+  createdAt: Time
+  updatedAt: Time
+}
+
+type AllProductVariant {
+  id: ID!
+  productGroupId: Int!
+  name: String!
+  sku: String
+  barcode: String
+  productUnit: AllProductUnit! @goField(forceResolver: true)
+  salesPrice: Decimal!
+  purchasePrice: Decimal!
+  salesAccount: AllAccount @goField(forceResolver: true)
+  purchaseAccount: AllAccount @goField(forceResolver: true)
+  salesTax: TaxInfo
+  purchaseTax: TaxInfo
+  isSalesTaxInclusive: Boolean!
+  inventoryAccount: AllAccount! @goField(forceResolver: true)
+  isActive: Boolean!
+  stocks(warehouseId: Int): [ProductStock] @goField(forceResolver: true)
+}
+
+input NewProductVariant {
+  variantId: Int
+  productGroupId: Int
+  name: String!
+  sku: String
+  barcode: String
+  unitId: Int!
+  salesPrice: Decimal
+  salesAccountId: Int
+  salesTaxId: Int
+  salesTaxType: TaxType
+  isSalesTaxInclusive: Boolean
+  purchasePrice: Decimal
+  purchaseAccountId: Int
+  purchaseTaxId: Int
+  purchaseTaxType: TaxType
+  inventoryAccountId: Int
+}
+
+type ProductVariantsConnection {
+  edges: [ProductVariantsEdge!]!
+  pageInfo: PageInfo!
+}
+
+type ProductVariantsEdge {
+  cursor: String!
+  node: ProductVariant
+}
+
+type PurchaseOrder {
+  id: ID!
+  businessId: String!
+  supplier: Supplier!
+  branch: AllBranch! @goField(forceResolver: true)
+  orderNumber: String!
+  referenceNumber: String
+  orderDate: Time!
+  expectedDeliveryDate: Time
+  orderPaymentTerms: PaymentTerms!
+  orderPaymentTermsCustomDays: Int
+  deliveryWarehouseId: Int
+  deliveryCustomerId: Int
+  deliveryAddress: String
+  shipmentPreference: AllShipmentPreference @goField(forceResolver: true)
+  notes: String
+  termsAndConditions: String
+  currency: AllCurrency! @goField(forceResolver: true)
+  exchangeRate: Decimal
+  orderDiscount: Decimal
+  orderDiscountType: DiscountType
+  orderDiscountAmount: Decimal
+  adjustmentAmount: Decimal
+  isTaxInclusive: Boolean!
+  orderTax: TaxInfo
+  orderTaxAmount: Decimal
+  currentStatus: PurchaseOrderStatus!
+  documents: [Document] @goField(forceResolver: true)
+  details: [PurchaseOrderDetail] @goField(forceResolver: true)
+  bill: Bill @goField(forceResolver: true)
+  warehouse: AllWarehouse! @goField(forceResolver: true)
+  orderSubtotal: Decimal
+  orderTotalDiscountAmount: Decimal
+  orderTotalTaxAmount: Decimal
+  orderTotalAmount: Decimal
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewPurchaseOrder {
+  branchId: Int!
+  supplierId: Int!
+  referenceNumber: String
+  orderDate: Time!
+  expectedDeliveryDate: Time
+  orderPaymentTerms: PaymentTerms!
+  orderPaymentTermsCustomDays: Int
+  deliveryWarehouseId: Int
+  deliveryAddress: String
+  shipmentPreferenceId: Int
+  notes: String
+  termsAndConditions: String
+  currencyId: Int!
+  exchangeRate: Decimal
+  orderDiscount: Decimal
+  orderDiscountType: DiscountType
+  adjustmentAmount: Decimal
+  isTaxInclusive: Boolean!
+  orderTaxId: Int
+  orderTaxType: TaxType
+  currentStatus: PurchaseOrderStatus!
+  documents: [NewDocument]
+  warehouseId: Int
+  details: [NewPurchaseOrderDetail!]!
+}
+
+type PurchaseOrderDetail {
+  id: ID!
+  purchaseOrderId: Int!
+  product: AllProduct! @goField(forceResolver: true)
+  productId: Int
+  productType: ProductType
+  batchNumber: String
+  name: String!
+  description: String
+  detailAccount: AllAccount! @goField(forceResolver: true)
+  detailQty: Decimal!
+  detailBilledQty: Decimal
+  detailUnitRate: Decimal!
+  detailTax: TaxInfo
+  detailDiscount: Decimal!
+  detailDiscountType: DiscountType
+  detailDiscountAmount: Decimal!
+  detailTaxAmount: Decimal!
+  detailTotalAmount: Decimal!
+}
+
+input NewPurchaseOrderDetail {
+  detailId: Int
+  productId: Int
+  productType: ProductType
+  batchNumber: String
+  name: String!
+  description: String
+  detailAccountId: Int
+  detailQty: Decimal!
+  detailUnitRate: Decimal!
+  detailTaxId: Int
+  detailTaxType: TaxType
+  detailDiscount: Decimal!
+  detailDiscountType: DiscountType
+  isDeletedItem: Boolean
+}
+
+type PurchaseOrdersConnection {
+  edges: [PurchaseOrdersEdge!]!
+  pageInfo: PageInfo!
+}
+
+type PurchaseOrdersEdge {
+  cursor: String!
+  node: PurchaseOrder
+}
+
+type Role {
+  id: ID!
+  businessId: String!
+  name: String!
+  roleModules: [RoleModule] @goField(forceResolver: true)
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewRole {
+  name: String!
+  allowedModules: [NewAllowedModule]
+}
+
+input NewAllowedModule {
+  moduleId: ID!
+  allowedActions: String!
+}
+
+type RoleModule {
+  businessId: String!
+  role: Role! @goField(forceResolver: true)
+  module: Module! @goField(forceResolver: true)
+  allowedActions: String!
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewRoleModule {
+  roleId: ID!
+  moduleId: ID!
+  allowedActions: String!
+}
+
+type SalesOrder {
+  id: ID!
+  businessId: String!
+  customer: Customer!
+  branch: AllBranch! @goField(forceResolver: true)
+  orderNumber: String!
+  referenceNumber: String
+  orderDate: Time!
+  expectedShipmentDate: Time
+  warehouse: AllWarehouse! @goField(forceResolver: true)
+  orderPaymentTerms: PaymentTerms!
+  orderPaymentTermsCustomDays: Int
+  deliveryMethod: AllDeliveryMethod @goField(forceResolver: true)
+  salesPerson: AllSalesPerson @goField(forceResolver: true)
+  notes: String
+  termsAndConditions: String
+  currency: AllCurrency! @goField(forceResolver: true)
+  exchangeRate: Decimal
+  orderDiscount: Decimal
+  orderDiscountType: DiscountType
+  orderDiscountAmount: Decimal
+  shippingCharges: Decimal
+  adjustmentAmount: Decimal
+  isTaxInclusive: Boolean!
+  orderTax: TaxInfo
+  orderTaxAmount: Decimal
+  currentStatus: SalesOrderStatus!
+  salesInvoice: SalesInvoice @goField(forceResolver: true)
+  documents: [Document] @goField(forceResolver: true)
+  orderSubtotal: Decimal
+  orderTotalDiscountAmount: Decimal
+  orderTotalTaxAmount: Decimal
+  orderTotalAmount: Decimal
+  details: [SalesOrderDetail] @goField(forceResolver: true)
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewSalesOrder {
+  customerId: Int!
+  branchId: Int!
+  referenceNumber: String
+  orderDate: Time!
+  exchangeRate: Decimal
+  expectedShipmentDate: Time
+  orderPaymentTerms: PaymentTerms!
+  orderPaymentTermsCustomDays: Int
+  deliveryMethodId: Int
+  salesPersonId: Int
+  notes: String
+  termsAndConditions: String
+  currencyId: Int!
+  orderDiscount: Decimal
+  orderDiscountType: DiscountType
+  shippingCharges: Decimal
+  adjustmentAmount: Decimal
+  isTaxInclusive: Boolean
+  orderTaxId: Int
+  orderTaxType: TaxType
+  currentStatus: SalesOrderStatus!
+  warehouseId: Int
+  documents: [NewDocument]
+  details: [NewSalesOrderDetail]
+}
+
+type SalesOrderDetail {
+  id: ID!
+  salesOrderId: Int!
+  product: AllProduct! @goField(forceResolver: true)
+  productId: Int
+  productType: ProductType
+  batchNumber: String
+  name: String!
+  description: String
+  detailAccount: AllAccount! @goField(forceResolver: true)
+  detailQty: Decimal!
+  DetailInvoicedQty: Decimal
+  detailUnitRate: Decimal!
+  detailDiscount: Decimal!
+  detailDiscountType: DiscountType
+  detailTax: TaxInfo
+  detailDiscountAmount: Decimal!
+  detailTaxAmount: Decimal!
+  detailTotalAmount: Decimal!
+}
+
+input NewSalesOrderDetail {
+  detailId: Int
+  productId: Int
+  productType: ProductType
+  batchNumber: String
+  name: String!
+  description: String
+  detailAccountId: Int
+  detailQty: Decimal!
+  detailUnitRate: Decimal!
+  detailDiscount: Decimal!
+  detailDiscountType: DiscountType
+  detailTaxId: Int
+  detailTaxType: TaxType
+  isDeletedItem: Boolean
+}
+
+type SalesInvoice {
+  id: ID!
+  businessId: String!
+  salesOrderId: Int
+  orderNumber: String
+  customer: Customer!
+  branch: AllBranch! @goField(forceResolver: true)
+  invoiceNumber: String!
+  referenceNumber: String
+  invoiceDate: Time!
+  invoiceDueDate: Time
+  invoicePaymentTerms: PaymentTerms!
+  invoicePaymentTermsCustomDays: Int
+  salesPerson: AllSalesPerson @goField(forceResolver: true)
+  invoiceSubject: String
+  notes: String
+  termsAndConditions: String
+  currency: AllCurrency! @goField(forceResolver: true)
+  exchangeRate: Decimal
+  warehouse: AllWarehouse! @goField(forceResolver: true)
+  invoiceDiscount: Decimal
+  invoiceDiscountType: DiscountType
+  invoiceDiscountAmount: Decimal
+  shippingCharges: Decimal
+  adjustmentAmount: Decimal
+  isTaxInclusive: Boolean!
+  invoiceTax: TaxInfo
+  invoiceTaxAmount: Decimal
+  currentStatus: SalesInvoiceStatus!
+  documents: [Document] @goField(forceResolver: true)
+  invoiceSubtotal: Decimal
+  invoiceTotalDiscountAmount: Decimal
+  invoiceTotalTaxAmount: Decimal
+  invoiceTotalAmount: Decimal
+  invoiceTotalPaidAmount: Decimal
+  invoiceTotalCreditUsedAmount: Decimal
+  invoiceTotalAdvanceUsedAmount: Decimal
+  invoiceTotalWriteOffAmount: Decimal
+  remainingBalance: Decimal
+  writeOffDate: Time
+  writeOffReason: String
+  details: [SalesInvoiceDetail] @goField(forceResolver: true)
+  salesOrder: SalesOrder @goField(forceResolver: true)
+  invoicePayment: [InvoicePayment] @goField(forceResolver: true)
+  appliedCustomerCredits: [CustomerCreditInvoice] @goField(forceResolver: true)
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewSalesInvoice {
+  customerId: Int!
+  branchId: Int!
+  orderNumber: String
+  referenceNumber: String
+  exchangeRate: Decimal
+  invoiceDate: Time!
+  invoicePaymentTerms: PaymentTerms!
+  invoicePaymentTermsCustomDays: Int
+  salesPersonId: Int
+  invoiceSubject: String
+  notes: String
+  termsAndConditions: String
+  currencyId: Int!
+  warehouseId: Int!
+  invoiceDiscount: Decimal
+  invoiceDiscountType: DiscountType
+  shippingCharges: Decimal
+  adjustmentAmount: Decimal
+  isTaxInclusive: Boolean
+  invoiceTaxId: Int
+  invoiceTaxType: TaxType
+  currentStatus: SalesInvoiceStatus!
+  documents: [NewDocument]
+  details: [NewSalesInvoiceDetail]
+}
+
+type SalesInvoiceDetail {
+  id: ID!
+  salesInvoiceId: Int!
+  product: AllProduct! @goField(forceResolver: true)
+  productId: Int
+  productType: ProductType
+  batchNumber: String
+  name: String!
+  description: String
+  detailAccount: AllAccount! @goField(forceResolver: true)
+  detailQty: Decimal!
+  detailUnitRate: Decimal!
+  detailDiscount: Decimal!
+  detailDiscountType: DiscountType
+  detailTax: TaxInfo
+  detailDiscountAmount: Decimal!
+  detailTaxAmount: Decimal!
+  detailTotalAmount: Decimal!
+  salesOrderItemId: Int
+}
+
+input NewSalesInvoiceDetail {
+  detailId: Int
+  productId: Int
+  productType: ProductType
+  batchNumber: String
+  name: String!
+  description: String
+  detailAccountId: Int
+  detailQty: Decimal!
+  detailUnitRate: Decimal!
+  detailDiscount: Decimal!
+  detailDiscountType: DiscountType
+  detailTaxId: Int
+  detailTaxType: TaxType
+  isDeletedItem: Boolean
+  salesOrderItemId: Int
+}
+
+type InvoicePayment {
+  paymentDate: Time!
+  paymentNumber: String!
+  referenceNumber: String!
+  amount: Decimal!
+  paymentMode: String!
+}
+
+type SalesInvoicesConnection {
+  edges: [SalesInvoicesEdge!]!
+  invoiceTotalSummary: InvoiceTotalSummary @goField(forceResolver: true)
+  pageInfo: PageInfo!
+}
+
+type SalesInvoicesEdge {
+  cursor: String!
+  node: SalesInvoice
+}
+
+type InvoiceTotalSummary {
+  totalOutstandingReceivable: Decimal!
+  dueToday: Decimal!
+  dueWithin30Days: Decimal!
+  totalOverdue: Decimal!
+}
+
+type SalesOrdersConnection {
+  edges: [SalesOrdersEdge!]!
+  pageInfo: PageInfo!
+}
+
+type SalesOrdersEdge {
+  cursor: String!
+  node: SalesOrder
+}
+
+type CustomerPayment {
+  id: ID!
+  businessId: String!
+  customer: Customer!
+  branch: AllBranch! @goField(forceResolver: true)
+  currency: AllCurrency! @goField(forceResolver: true)
+  exchangeRate: Decimal
+  amount: Decimal!
+  bankCharges: Decimal
+  paymentDate: Time!
+  paymentNumber: String!
+  paymentMode: AllPaymentMode @goField(forceResolver: true)
+  depositAccount: AllAccount @goField(forceResolver: true)
+  referenceNumber: String
+  notes: String
+  documents: [Document] @goField(forceResolver: true)
+  paidInvoices: [PaidInvoice!] @goField(forceResolver: true)
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewCustomerPayment {
+  branchId: Int!
+  customerId: Int!
+  currencyId: Int!
+  exchangeRate: Decimal
+  amount: Decimal!
+  bankCharges: Decimal
+  paymentDate: Time!
+  paymentModeId: Int
+  depositAccountId: Int!
+  referenceNumber: String
+  notes: String
+  documents: [NewDocument]
+  paidInvoices: [NewPaidInvoice!]!
+}
+type CustomerPaymentsConnection {
+  edges: [CustomerPaymentsEdge!]!
+  pageInfo: PageInfo!
+}
+
+type CustomerPaymentsEdge {
+  cursor: String!
+  node: CustomerPayment
+}
+
+type PaidInvoice {
+  id: ID!
+  customerPaymentId: Int!
+  # invoiceId: Int!
+  invoice: SalesInvoice!
+  paidAmount: Decimal!
+}
+
+type CreditNote {
+  id: ID!
+  businessId: String!
+  customer: Customer!
+  branch: AllBranch! @goField(forceResolver: true)
+  creditNoteNumber: String!
+  referenceNumber: String
+  creditNoteDate: Time!
+  creditNoteSubject: String
+  salesPerson: AllSalesPerson @goField(forceResolver: true)
+  notes: String
+  termsAndConditions: String
+  currency: AllCurrency! @goField(forceResolver: true)
+  exchangeRate: Decimal
+  warehouse: AllWarehouse! @goField(forceResolver: true)
+  creditNoteDiscount: Decimal
+  creditNoteDiscountType: DiscountType
+  creditNoteDiscountAmount: Decimal
+  shippingCharges: Decimal
+  adjustmentAmount: Decimal
+  isTaxInclusive: Boolean!
+  creditNoteTax: TaxInfo
+  creditNoteTaxAmount: Decimal
+  currentStatus: CreditNoteStatus!
+  creditNoteSubtotal: Decimal
+  creditNoteTotalDiscountAmount: Decimal
+  creditNoteTotalTaxAmount: Decimal
+  creditNoteTotalAmount: Decimal
+  creditNoteTotalUsedAmount: Decimal
+  creditNoteTotalRefundAmount: Decimal
+  remainingBalance: Decimal
+  details: [CreditNoteDetail] @goField(forceResolver: true)
+  creditedInvoices: [CustomerCreditInvoice] @goField(forceResolver: true)
+  refunds: [Refund]
+  documents: [Document] @goField(forceResolver: true)
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewCreditNote {
+  customerId: Int!
+  branchId: Int!
+  referenceNumber: String
+  creditNoteDate: Time!
+  creditNoteSubject: String
+  salesPersonId: Int
+  notes: String
+  termsAndConditions: String
+  currencyId: Int!
+  exchangeRate: Decimal
+  warehouseId: Int!
+  creditNoteDiscount: Decimal
+  creditNoteDiscountType: DiscountType
+  shippingCharges: Decimal
+  adjustmentAmount: Decimal
+  isTaxInclusive: Boolean!
+  creditNoteTaxId: Int
+  creditNoteTaxType: TaxType
+  currentStatus: CreditNoteStatus!
+  details: [NewCreditNoteDetail]
+  documents: [NewDocument]
+}
+
+type CreditNoteDetail {
+  id: ID!
+  creditNoteId: Int!
+  product: AllProduct! @goField(forceResolver: true)
+  productId: Int
+  productType: ProductType
+  name: String!
+  description: String
+  detailAccount: AllAccount! @goField(forceResolver: true)
+  detailQty: Decimal!
+  detailUnitRate: Decimal!
+  detailDiscount: Decimal!
+  detailDiscountType: DiscountType
+  detailTax: TaxInfo
+  detailDiscountAmount: Decimal!
+  detailTaxAmount: Decimal!
+  detailTotalAmount: Decimal!
+}
+
+input NewCreditNoteDetail {
+  detailId: Int
+  productId: Int
+  productType: ProductType
+  name: String!
+  description: String
+  detailAccountId: Int
+  detailQty: Decimal!
+  detailUnitRate: Decimal!
+  detailDiscount: Decimal!
+  detailDiscountType: DiscountType
+  detailTaxId: Int
+  detailTaxType: TaxType
+  isDeletedItem: Boolean
+}
+
+type CreditNotesConnection {
+  edges: [CreditNotesEdge!]!
+  pageInfo: PageInfo!
+}
+
+type CreditNotesEdge {
+  cursor: String!
+  node: CreditNote
+}
+
+input NewPaidInvoice {
+  paidInvoiceId: Int
+  invoiceId: Int!
+  paidAmount: Decimal!
+}
+
+type Reason {
+  id: ID!
+  businessId: String!
+  name: String!
+  isActive: Boolean!
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewReason {
+  name: String!
+}
+
+type AllReason {
+  id: ID!
+  name: String!
+  isActive: Boolean!
+}
+
+type SalesPerson {
+  id: ID!
+  businessId: String!
+  name: String!
+  email: String
+  isActive: Boolean!
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewSalesPerson {
+  name: String!
+  email: String
+}
+
+type SalesPersonsConnection {
+  edges: [SalesPersonsEdge!]!
+  pageInfo: PageInfo!
+}
+
+type SalesPersonsEdge {
+  cursor: String!
+  node: SalesPerson
+}
+
+type ShipmentPreference {
+  id: ID!
+  businessId: String!
+  name: String!
+  isActive: Boolean!
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewShipmentPreference {
+  name: String!
+}
+
+type State {
+  id: ID!
+  country: String!
+  code: String!
+  stateNameEn: String!
+  stateNameMm: String!
+  postalCode: String!
+  isActive: Boolean!
+}
+
+input NewState {
+  country: String!
+  code: String!
+  stateNameEn: String!
+  stateNameMm: String!
+  postalCode: String!
+}
+
+type StatesConnection {
+  edges: [StatesEdge!]!
+  pageInfo: PageInfo!
+}
+
+type StatesEdge {
+  cursor: String!
+  node: State
+}
+
+type Supplier {
+  id: ID!
+  businessId: String!
+  name: String!
+  email: String
+  phone: String
+  mobile: String
+  currency: AllCurrency! @goField(forceResolver: true)
+  products: [Product!]!
+  bills: [Bill!]
+  unpaidBills: [Bill!]
+  paidBills: [Bill!]
+  supplierTax: TaxInfo
+  supplierPaymentTerms: PaymentTerms!
+  supplierPaymentTermsCustomDays: Int
+  notes: String
+  exchangeRate: Decimal
+  openingBalanceBranchId: Int
+  openingBalance: Decimal
+  billingAddress: BillingAddress @goField(forceResolver: true)
+  shippingAddress: ShippingAddress @goField(forceResolver: true)
+  contactPersons: [ContactPerson] @goField(forceResolver: true)
+  documents: [Document] @goField(forceResolver: true)
+  availableCredits: [SupplierCredit] @goField(forceResolver: true)
+  availableAdvances: [SupplierCreditAdvance] @goField(forceResolver: true)
+  isActive: Boolean!
+  totalOutstandingPayable: Decimal! @goField(forceResolver: true)
+  totalOutstandingCredit: Decimal! @goField(forceResolver: true)
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewSupplier {
+  name: String!
+  email: String
+  phone: String
+  mobile: String
+  currencyId: Int!
+  supplierTaxId: Int
+  supplierTaxType: TaxType
+  supplierPaymentTerms: PaymentTerms!
+  supplierPaymentTermsCustomDays: Int
+  notes: String
+  exchangeRate: Decimal
+  openingBalanceBranchId: Int
+  openingBalance: Decimal
+  billingAddress: NewBillingAddress
+  shippingAddress: NewShippingAddress
+  contactPersons: [NewContactPerson]
+  documents: [NewDocument]
+}
+
+type SuppliersConnection {
+  edges: [SuppliersEdge!]!
+  pageInfo: PageInfo!
+}
+
+type SuppliersEdge {
+  cursor: String!
+  node: Supplier
+}
+
+type SupplierPaymentsConnection {
+  edges: [SupplierPaymentsEdge!]!
+  pageInfo: PageInfo!
+}
+
+type SupplierPaymentsEdge {
+  cursor: String!
+  node: SupplierPayment
+}
+
+type SupplierCreditsConnection {
+  edges: [SupplierCreditsEdge!]!
+  pageInfo: PageInfo!
+}
+
+type SupplierCreditsEdge {
+  cursor: String!
+  node: SupplierCredit
+}
+
+type Tax {
+  id: ID!
+  businessId: String!
+  name: String!
+  rate: Decimal!
+  isCompoundTax: Boolean!
+  isActive: Boolean!
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewTax {
+  name: String!
+  rate: Decimal!
+  isCompoundTax: Boolean!
+}
+
+type TaxGroup {
+  id: ID!
+  businessId: String!
+  name: String!
+  rate: Decimal!
+  taxes: [Tax] @goField(forceResolver: true)
+  isActive: Boolean!
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewTaxGroup {
+  name: String!
+  taxes: [NewGroupTax!]!
+}
+
+input NewGroupTax {
+  taxId: Int!
+}
+
+type TaxInfo {
+  id: String!
+  name: String!
+  rate: Decimal!
+  type: TaxType!
+  isActive: Boolean!
+}
+
+type ShippingAddress {
+  id: ID!
+  attention: String
+  address: String
+  country: String
+  city: String
+  state: AllState @goField(forceResolver: true)
+  township: AllTownship @goField(forceResolver: true)
+  phone: String
+  mobile: String
+  email: String
+  referenceType: String
+  referenceID: Int
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewShippingAddress {
+  attention: String
+  address: String
+  country: String
+  city: String
+  stateId: Int
+  townshipId: Int
+  phone: String
+  mobile: String
+  email: String
+}
+
+type Township {
+  id: ID!
+  code: String!
+  stateCode: String!
+  townshipNameEn: String!
+  townshipNameMm: String!
+  postalCode: String!
+  isActive: Boolean!
+}
+
+input NewTownship {
+  code: String!
+  stateCode: String!
+  townshipNameEn: String!
+  townshipNameMm: String!
+  postalCode: String!
+}
+
+type TownshipsConnection {
+  edges: [TownshipsEdge!]!
+  pageInfo: PageInfo!
+}
+
+type TownshipsEdge {
+  cursor: String!
+  node: Township
+}
+
+type TransactionNumberSeries {
+  id: ID!
+  businessId: String!
+  name: String!
+  modules: [TransactionNumberSeriesModule]
+  createdAt: Time
+  updatedAt: Time
+}
+
+type TransactionNumberSeriesModule {
+  moduleName: String!
+  prefix: String
+}
+
+input NewTransactionNumberSeries {
+  name: String!
+  modules: [NewTransactionNumberSeriesModule]
+}
+
+input NewTransactionNumberSeriesModule {
+  moduleName: String!
+  prefix: String
+}
+
+type User {
+  id: ID!
+  businessId: String!
+  username: String!
+  name: String!
+  email: String
+  phone: String
+  mobile: String
+  imageUrl: String
+  isActive: Boolean!
+  role: UserRole!
+  roleId: Int
+  branches: String
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewUser {
+  username: String!
+  businessId: String!
+  name: String!
+  email: String
+  phone: String
+  mobile: String
+  imageUrl: String
+  isActive: Boolean!
+  password: String!
+  role: UserRole!
+  roleId: Int
+  branches: String
+}
+
+type UserAccount {
+  id: ID!
+  username: String!
+  name: String!
+  email: String
+  phone: String
+  mobile: String
+  imageUrl: String
+  isActive: Boolean!
+  roleId: Int
+  role: Role @goField(forceResolver: true)
+  branches: String
+}
+
+input NewUserAccount {
+  username: String!
+  name: String!
+  email: String
+  phone: String
+  mobile: String
+  imageUrl: String
+  # isActive: Boolean!
+  password: String!
+  roleId: Int
+  branches: String
+}
+
+type Warehouse {
+  id: ID!
+  businessId: String!
+  branch: AllBranch! @goField(forceResolver: true)
+  name: String!
+  phone: String
+  mobile: String
+  address: String
+  country: String
+  city: String
+  state: AllState @goField(forceResolver: true)
+  township: AllTownship @goField(forceResolver: true)
+  isActive: Boolean!
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewWarehouse {
+  branchId: Int!
+  name: String!
+  phone: String
+  mobile: String
+  address: String
+  country: String
+  city: String
+  stateId: Int
+  townshipId: Int
+}
+
+type UploadResponse {
+  image_url: String!
+  thumbnail_url: String
+}
+
+type LoginInfo {
+  token: String!
+  name: String!
+  role: String!
+  modules: [AllowedModule]
+  businessName: String!
+  baseCurrencyId: Int!
+  baseCurrencyName: String!
+  fiscalYear: FiscalYear!
+  timezone: String
+}
+
+type AllowedModule {
+  moduleName: String!
+  allowedActions: String!
+}
+
+type PageInfo {
+  startCursor: String!
+  endCursor: String!
+  hasNextPage: Boolean!
+}
+
+type AllAccount {
+  id: ID!
+  name: String!
+  code: String
+  detailType: AccountDetailType!
+  mainType: AccountMainType!
+  isActive: Boolean!
+  systemDefaultCode: String
+  currency: AllCurrency @goField(forceResolver: true)
+}
+
+type AllBranch {
+  id: ID!
+  name: String!
+  isActive: Boolean!
+}
+
+type AllBusiness {
+  id: UUID!
+  logoUrl: String!
+  name: String!
+  isActive: Boolean!
+  email: String!
+  address: String!
+  country: String
+  city: String
+}
+
+type AllCurrency {
+  id: ID!
+  decimalPlaces: DecimalPlaces!
+  name: String!
+  symbol: String!
+  isActive: Boolean!
+}
+
+type AllDeliveryMethod {
+  id: ID!
+  name: String!
+  isActive: Boolean!
+}
+
+type AllMoneyAccount {
+  id: ID!
+  accountName: String!
+  isActive: Boolean!
+}
+
+type AllPaymentMode {
+  id: ID!
+  name: String!
+  isActive: Boolean!
+}
+
+type AllRole {
+  id: ID!
+  name: String!
+  isActive: Boolean!
+}
+
+type AllSalesPerson {
+  id: ID!
+  name: String!
+  isActive: Boolean!
+}
+
+type AllShipmentPreference {
+  id: ID!
+  name: String!
+  isActive: Boolean!
+}
+
+type AllState {
+  id: ID!
+  code: String!
+  stateNameEn: String!
+  stateNameMm: String!
+  isActive: Boolean!
+}
+
+type AllTax {
+  id: ID!
+  isCompoundTax: Boolean!
+  name: String!
+  rate: Decimal!
+  isActive: Boolean!
+}
+
+type AllTaxGroup {
+  id: ID!
+  name: String!
+  rate: Decimal!
+  isActive: Boolean!
+}
+
+type AllTownship {
+  id: ID!
+  code: String!
+  stateCode: String!
+  townshipNameEn: String!
+  townshipNameMm: String!
+  isActive: Boolean!
+}
+
+type AllUser {
+  id: ID!
+  name: String!
+  isActive: Boolean!
+}
+
+type AllWarehouse {
+  id: ID!
+  name: String!
+  branchId: Int!
+  isActive: Boolean!
+}
+
+type GeneratedDummy {
+  name: String!
+}
+
+type TransferOrder {
+  id: ID!
+  businessId: String!
+  orderNumber: String!
+  transferDate: Time!
+  sourceWarehouse: AllWarehouse! @goField(forceResolver: true)
+  destinationWarehouse: AllWarehouse! @goField(forceResolver: true)
+  totalTransferQty: Decimal!
+  reason: AllReason! @goField(forceResolver: true)
+  currentStatus: TransferOrderStatus!
+  documents: [Document] @goField(forceResolver: true)
+  details: [TransferOrderDetail] @goField(forceResolver: true)
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewTransferOrder {
+  orderNumber: String
+  transferDate: Time!
+  reasonId: Int!
+  sourceWarehouseId: Int!
+  destinationWarehouseId: Int!
+  currentStatus: TransferOrderStatus!
+  documents: [NewDocument]
+  details: [NewTransferOrderDetail]
+}
+
+type TransferOrderDetail {
+  id: ID!
+  transferOrderId: Int!
+  productId: Int
+  productType: ProductType
+  batchNumber: String
+  name: String!
+  description: String
+  transferQty: Decimal!
+}
+
+input NewTransferOrderDetail {
+  detailId: Int
+  productId: Int
+  productType: ProductType
+  batchNumber: String
+  name: String!
+  description: String
+  transferQty: Decimal!
+  isDeletedItem: Boolean
+}
+
+type TransferOrdersConnection {
+  edges: [TransferOrdersEdge!]!
+  pageInfo: PageInfo!
+}
+
+type TransferOrdersEdge {
+  cursor: String!
+  node: TransferOrder
+}
+
+type SalesByCustomerResponse {
+  CustomerId: ID!
+  CustomerName: String
+  InvoiceCount: Int!
+  TotalSales: Decimal!
+  TotalSalesWithTax: Decimal!
+  TotalDiscount: Decimal!
+}
+
+type SalesBySalesPersonResponse {
+  SalesPersonId: ID!
+  SalesPersonName: String
+
+  InvoiceCount: Int!
+  TotalInvoiceSales: Decimal!
+  TotalInvoiceSalesWithTax: Decimal!
+  TotalInvoiceDiscount: Decimal!
+
+  CreditNoteCount: Int!
+  TotalCreditNoteSales: Decimal!
+  TotalCreditNoteSalesWithTax: Decimal!
+  TotalCreditNoteDiscount: Decimal!
+
+  TotalSales: Decimal!
+  TotalSalesWithTax: Decimal!
+}
+
+type InventoryAdjustment {
+  id: ID!
+  businessId: String!
+  adjustmentType: InventoryAdjustmentType!
+  referenceNumber: String!
+  adjustmentDate: Time!
+  account: AllAccount! @goField(forceResolver: true)
+  branch: AllBranch! @goField(forceResolver: true)
+  warehouse: AllWarehouse! @goField(forceResolver: true)
+  currentStatus: InventoryAdjustmentStatus!
+  reason: AllReason! @goField(forceResolver: true)
+  description: String
+  documents: [Document] @goField(forceResolver: true)
+  details: [InventoryAdjustmentDetail] @goField(forceResolver: true)
+  createdBy: AllUser @goField(forceResolver: true)
+  createdAt: Time
+  updatedBy: AllUser @goField(forceResolver: true)
+  updatedAt: Time
+}
+
+input NewInventoryAdjustment {
+  referenceNumber: String
+  adjustmentType: InventoryAdjustmentType!
+  adjustmentDate: Time!
+  accountId: Int!
+  branchId: Int!
+  warehouseId: Int!
+  reasonId: Int!
+  description: String
+  currentStatus: InventoryAdjustmentStatus!
+  documents: [NewDocument]
+  details: [NewInventoryAdjustmentDetail]
+}
+
+type InventoryAdjustmentDetail {
+  id: ID!
+  InventoryAdjustmentId: Int!
+  productId: Int
+  productType: ProductType
+  batchNumber: String
+  name: String!
+  description: String
+  adjustedValue: Decimal!
+  costPrice: Decimal
+  stocks: [ProductStock] @goField(forceResolver: true)
+}
+
+input NewInventoryAdjustmentDetail {
+  detailId: Int
+  productId: Int
+  productType: ProductType
+  batchNumber: String
+  name: String!
+  description: String
+  adjustedValue: Decimal!
+  costPrice: Decimal
+  isDeletedItem: Boolean
+}
+
+type InventoryAdjustmentsConnection {
+  edges: [InventoryAdjustmentsEdge!]!
+  pageInfo: PageInfo!
+}
+
+type InventoryAdjustmentsEdge {
+  cursor: String!
+  node: InventoryAdjustment
+}
+
+type StockSummary {
+  id: ID!
+  warehouseId: Int!
+  productId: Int!
+  productType: ProductType!
+  product: AllProduct! @goField(forceResolver: true)
+  batchNumber: String
+  orderQty: Decimal
+  receivedQty: Decimal
+  transferQtyIn: Decimal!
+  transferQtyOut: Decimal!
+  adjustedQtyIn: Decimal!
+  adjustedQtyOut: Decimal!
+  saleQty: Decimal
+  committedQty: Decimal
+  currentQty: Decimal
+}
+
+type InventorySummaryResponse {
+  productId: Int
+  productName: String
+  productUnit: AllProductUnit @goField(forceResolver: true)
+  productSku: String
+  openingQty: Decimal!
+  orderQty: Decimal!
+  receivedQty: Decimal!
+  transferQtyIn: Decimal!
+  transferQtyOut: Decimal!
+  adjustedQtyIn: Decimal!
+  adjustedQtyOut: Decimal!
+  saleQty: Decimal!
+  committedQty: Decimal!
+  currentQty: Decimal!
+  availableStock: Decimal!
+}
+
+type WarehouseInventoryResponse {
+  warehouseId: Int
+  warehouseName: String
+  productId: Int
+  productName: String
+  productUnit: AllProductUnit @goField(forceResolver: true)
+  productSku: String
+  openingQty: Decimal!
+  orderQty: Decimal!
+  receivedQty: Decimal!
+  transferQtyIn: Decimal!
+  transferQtyOut: Decimal!
+  adjustedQtyIn: Decimal!
+  adjustedQtyOut: Decimal!
+  saleQty: Decimal!
+  committedQty: Decimal!
+  currentQty: Decimal!
+  availableStock: Decimal!
+}
+
+input UserDefinedExchangeRate {
+  currencyId: Int!
+  exchangeRate: Decimal!
+}
+
+type UnrealisedExchangeGainLossResponse {
+  accountId: Int!
+  accountName: String
+  currencyId: Int!
+  currencyName: String
+  foreignClosingBalance: Decimal!
+  baseClosingBalance: Decimal!
+  exchangeRate: Decimal!
+  revaluedBalance: Decimal!
+  gainLossAmount: Decimal!
+}
+
+type RealisedExchangeGainLossResponse {
+  date: Time!
+  transactionType: String!
+  currencyId: Int!
+  currencyName: String
+  exchangeRate: Decimal!
+  realisedAmount: Decimal!
+  gainLossAmount: Decimal!
+}
+
+type BankingTransactionsConnection {
+  edges: [BankingTransactionsEdge!]!
+  pageInfo: PageInfo!
+}
+
+type BankingTransactionsEdge {
+  cursor: String!
+  node: BankingTransaction
+}
+
+type BankingTransaction {
+  id: ID!
+  branch: AllBranch @goField(forceResolver: true)
+  transactionDate: Time!
+  amount: Decimal!
+  fromAccountClosingBalance: Decimal
+  toAccountClosingBalance: Decimal
+  referenceNumber: String
+  description: String
+  transactionId: Int!
+  transactionType: BankingTransactionType!
+  fromAccount: AllAccount @goField(forceResolver: true)
+  fromAccountAmount: Decimal!
+  toAccount: AllAccount @goField(forceResolver: true)
+  toAccountAmount: Decimal!
+  paymentMode: AllPaymentMode @goField(forceResolver: true)
+  exchangeRate: Decimal
+  taxAmount: Decimal
+  currency: AllCurrency @goField(forceResolver: true)
+  bankCharges: Decimal
+  supplier: Supplier
+  customer: Customer
+  documents: [Document] @goField(forceResolver: true)
+  details: [BankingTransactionDetail] @goField(forceResolver: true)
+}
+
+input NewBankingTransaction {
+  branchId: Int!
+  transactionDate: Time!
+  amount: Decimal!
+  referenceNumber: String
+  description: String
+  paymentModeId: Int
+  transactionType: BankingTransactionType!
+  fromAccountId: Int
+  toAccountId: Int
+  exchangeRate: Decimal
+  taxAmount: Decimal
+  currencyId: Int
+  bankCharges: Decimal
+  supplierId: Int
+  customerId: Int
+  documents: [NewDocument]
+  details: [NewBankingTransactionDetail]
+}
+
+type BankingTransactionDetail {
+  id: ID!
+  invoiceReferenceId: Int
+  invoiceNo: String
+  bankingTransactionId: Int
+  dueAmount: Decimal
+  paymentAmount: Decimal
+  dueDate: Time
+}
+
+input NewBankingTransactionDetail {
+  id: Int
+  invoiceNo: String
+  dueAmount: Decimal
+  paymentAmount: Decimal
+  dueDate: Time
+}
+
+type SalesByProductResponse {
+  productName: String
+  productSku: String
+  soldQty: Decimal!
+  totalAmount: Decimal!
+  totalAmountWithDiscount: Decimal!
+  averagePrice: Decimal!
+}
+
+type ProductSalesReportResponse {
+  productName: String
+  productSku: String
+  soldQty: Decimal!
+  totalAmount: Decimal!
+  totalAmountWithTax: Decimal!
+  totalCogs: Decimal!
+  margin: Decimal!
+  grossProfit: Decimal!
+}
+
+type SupplierCreditAdvance {
+  id: ID!
+  date: Time!
+  branch: AllBranch @goField(forceResolver: true)
+  supplier: Supplier!
+  amount: Decimal!
+  usedAmount: Decimal!
+  currency: AllCurrency @goField(forceResolver: true)
+  currentStatus: SupplierAdvanceStatus!
+  refundAmount: Decimal
+  remainingBalance: Decimal
+  refunds: [Refund]
+  createdAt: Time
+  updatedAt: Time
+}
+
+type CustomerCreditAdvance {
+  id: ID!
+  date: Time!
+  branch: AllBranch @goField(forceResolver: true)
+  customer: Customer!
+  amount: Decimal!
+  usedAmount: Decimal!
+  currency: AllCurrency @goField(forceResolver: true)
+  currentStatus: CustomerAdvanceStatus!
+  refundAmount: Decimal
+  remainingBalance: Decimal
+  refunds: [Refund]
+  createdAt: Time
+  updatedAt: Time
+}
+
+type SupplierCreditBill {
+  id: ID!
+  businessId: String
+  referenceId: Int!
+  referenceType: SupplierCreditApplyType!
+  supplierCreditNumber: String!
+  branchId: Int!
+  supplierId: Int!
+  billId: Int!
+  billNumber: String!
+  creditDate: Time!
+  amount: Decimal!
+  currency: AllCurrency @goField(forceResolver: true)
+  exchangeRate: Decimal
+  createdAt: Time
+  updatedAt: Time
+}
+
+# input NewSupplierCreditApplyToBill {
+#   supplierCreditId: Int!
+#   applyBills: [NewCreditApplyBill!]!
+# }
+
+# input NewCreditApplyBill {
+#   billId: Int!
+#   billNumber: String!
+#   amount: Decimal!
+#   currencyId: Int!
+#   exchangeRate: Decimal
+# }
+
+input NewBillApplyToSupplierCredit {
+  billId: Int!
+  applyCredits: [NewBillApplyCredit!]!
+}
+
+input NewBillApplyCredit {
+  referenceId: Int!
+  referenceType: SupplierCreditApplyType!
+  amount: Decimal!
+  currencyId: Int!
+  exchangeRate: Decimal
+}
+
+type CustomerCreditInvoice {
+  id: ID!
+  businessId: String
+  referenceId: Int!
+  referenceType: CustomerCreditApplyType!
+  customerCreditNumber: String!
+  branchId: Int!
+  customerId: Int!
+  invoiceId: Int!
+  invoiceNumber: String!
+  creditDate: Time!
+  amount: Decimal!
+  currency: AllCurrency @goField(forceResolver: true)
+  exchangeRate: Decimal
+  createdAt: Time
+  updatedAt: Time
+}
+
+# input NewCustomerCreditApplyToInvoice {
+#   customerCreditId: Int!
+#   applyInvoices: [NewCreditApplyInvoice!]!
+# }
+
+# input NewCreditApplyInvoice {
+#   invoiceId: Int!
+#   invoiceNumber: String!
+#   amount: Decimal!
+#   currencyId: Int!
+#   exchangeRate: Decimal
+# }
+
+input NewInvoiceApplyToCustomerCredit {
+  invoiceId: Int!
+  applyCredits: [NewInvoiceApplyCredit!]!
+}
+
+input NewInvoiceApplyCredit {
+  referenceId: Int!
+  referenceType: CustomerCreditApplyType!
+  amount: Decimal!
+  currencyId: Int!
+  exchangeRate: Decimal
+}
+
+type StockSummaryReportResponse {
+  productName: String
+  productSku: String
+  openingStock: Decimal!
+  qtyIn: Decimal!
+  qtyOut: Decimal!
+  closingStock: Decimal!
+}
+
+type Refund {
+  id: ID!
+  businessId: String
+  branch: AllBranch! @goField(forceResolver: true)
+  referenceId: Int!
+  referenceType: RefundReferenceType!
+  refundDate: Time!
+  amount: Decimal!
+  currency: AllCurrency! @goField(forceResolver: true)
+  exchangeRate: Decimal
+  referenceNumber: String
+  description: String
+  paymentMode: AllPaymentMode @goField(forceResolver: true)
+  account: AllAccount @goField(forceResolver: true)
+  supplier: Supplier
+  customer: Customer
+  createdAt: Time
+  updatedAt: Time
+}
+
+input NewRefund {
+  branchId: Int!
+  currencyId: Int!
+  exchangeRate: Decimal
+  referenceId: Int!
+  referenceType: RefundReferenceType!
+  refundDate: Time!
+  amount: Decimal!
+  referenceNumber: String
+  description: String
+  paymentModeId: Int
+  accountId: Int!
+  supplierId: Int
+  customerId: Int
+}
+
+type ARAgingSummaryResponse {
+  customerName: String!
+  customerId: Int!
+  currencySymbol: String!
+  decimalPlaces: DecimalPlaces!
+  total: Decimal!
+  totalFcy: Decimal!
+  current: Decimal!
+  int1to15: Decimal!
+  int16to30: Decimal!
+  int31to45: Decimal!
+  int46plus: Decimal!
+  invoiceCount: Int!
+}
+
+type APAgingSummaryResponse {
+  supplierName: String!
+  supplierId: Int!
+  currencySymbol: String!
+  decimalPlaces: DecimalPlaces!
+  total: Decimal!
+  totalFcy: Decimal!
+  current: Decimal!
+  int1to15: Decimal!
+  int16to30: Decimal!
+  int31to45: Decimal!
+  int46plus: Decimal!
+  billCount: Int!
+}
+
+type ARAgingDetailResponse {
+  interval: String!
+  details: [ARAgingDetail]
+  amount: Decimal!
+  balanceDue: Decimal!
+}
+
+type ARAgingDetail {
+  invoiceId: Int!
+  invoiceDate: Time!
+  invoiceNumber: String!
+  invoiceStatus: String!
+  customerId: Int!
+  customerName: String
+  age: Int!
+  currencySymbol: String!
+  decimalPlaces: DecimalPlaces!
+  totalAmount: Decimal!
+  remainingBalance: Decimal!
+  totalAmountFcy: Decimal!
+  remainingBalanceFcy: Decimal!
+}
+
+type APAgingDetailResponse {
+  interval: String!
+  details: [APAgingDetail]
+  amount: Decimal!
+  balanceDue: Decimal!
+}
+
+type APAgingDetail {
+  billId: Int!
+  billDate: Time!
+  billNumber: String!
+  billStatus: String!
+  supplierId: Int!
+  supplierName: String
+  age: Int!
+  currencySymbol: String!
+  decimalPlaces: DecimalPlaces!
+  totalAmount: Decimal!
+  remainingBalance: Decimal!
+  totalAmountFcy: Decimal!
+  remainingBalanceFcy: Decimal!
+}
+
+type SalesOrderDetailResponse {
+  orderId: Int!
+  orderNumber: String!
+  orderStatus: String!
+  orderDate: Time!
+  expectedShipmentDate: Time
+  orderAmount: Decimal!
+  currencyId: Int!
+  currencySymbol: String!
+  decimalPlaces: DecimalPlaces!
+  orderAmountFcy: Decimal!
+  customerId: Int!
+  customerName: String!
+}
+
+type SalesInvoiceDetailResponse {
+  invoiceId: Int!
+  invoiceNumber: String!
+  orderNumber: String!
+  invoiceStatus: String!
+  invoiceDate: Time!
+  invoiceDueDate: Time!
+  totalAmount: Decimal!
+  totalAmountFcy: Decimal!
+  remainingBalance: Decimal!
+  remainingBalanceFcy: Decimal!
+  # currencyId: Int!
+  currencySymbol: String!
+  decimalPlaces: DecimalPlaces!
+  customerId: Int!
+  customerName: String!
+}
+
+type PurchaseOrderDetailResponse {
+  orderId: Int!
+  orderNumber: String!
+  orderStatus: String!
+  orderDate: Time!
+  expectedDeliveryDate: Time
+  orderAmount: Decimal!
+  # currencyId: Int!
+  currencySymbol: String
+  decimalPlaces: DecimalPlaces!
+  orderAmountFcy: Decimal!
+  supplierId: Int!
+  supplierName: String
+}
+
+type BillDetailResponse {
+  billId: Int!
+  billNumber: String!
+  orderNumber: String!
+  billStatus: String!
+  billDate: Time!
+  billDueDate: Time!
+  totalAmount: Decimal!
+  totalAmountFcy: Decimal!
+  remainingBalance: Decimal!
+  remainingBalanceFcy: Decimal!
+  # currencyId: Int!
+  currencySymbol: String!
+  decimalPlaces: DecimalPlaces!
+  supplierId: Int!
+  supplierName: String!
+}
+
+type PayableReceivableResponse {
+  totalReceivable: APandAR
+  totalPayable: APandAR
+}
+
+type APandAR {
+  currencySymbol: String!
+  total: Decimal!
+  current: Decimal!
+  int1to15: Decimal!
+  int16to30: Decimal!
+  int31to45: Decimal!
+  int46plus: Decimal!
+}
+
+type IncomeExpenseReponse {
+  totalIncome: Decimal!
+  totalExpense: Decimal!
+  incomeExpenseDetails: [IncomeExpenseDetails]!
+}
+
+type IncomeExpenseDetails {
+  month: String!
+  incomeAmount: Decimal!
+  expenseAmount: Decimal!
+}
+
+type TopExpensesResponse {
+  accountName: String!
+  amount: Decimal!
+}
+
+type CashFlowReponse {
+  totalOpeningBalance: Decimal!
+  totalIncomingAmount: Decimal!
+  totalOutgoingAmount: Decimal!
+  totalEndingBalance: Decimal!
+  cashFlowDetails: [CashFlowDetails]!
+}
+
+type CashFlowDetails {
+  month: String!
+  openingBalance: Decimal!
+  incomingAmount: Decimal!
+  outgoingAmount: Decimal!
+  endingBalance: Decimal!
+}
+
+type ExpenseDetail {
+  ID: ID!
+  expenseAccount: AllAccount! @goField(forceResolver: true)
+  assetAccount: AllAccount! @goField(forceResolver: true)
+  branch: AllBranch! @goField(forceResolver: true)
+  expenseDate: Time!
+  currency: AllCurrency @goField(forceResolver: true)
+  exchangeRate: Decimal
+  supplier: Supplier!
+  customer: Customer!
+  expenseNumber: String!
+  sequenceNo: Decimal
+  referenceNumber: String!
+  notes: String
+  fcyAmount: Decimal!
+  amount: Decimal!
+  amountWithTax: Decimal!
+}
+
+type ExpenseSummaryByCategory {
+  totalAmount: Decimal!
+  totalAmountWithTax: Decimal!
+  expenseSummaryByCategoryDetail: [ExpenseSummaryByCategoryDetail]!
+}
+
+type ExpenseSummaryByCategoryDetail {
+  accountId: Int!
+  accountName: String!
+  amount: Decimal!
+  amountWithTax: Decimal!
+}
+
+type ExpenseByCategory {
+  transactionDate: Time!
+  transactionType: String!
+  customerName: String!
+  customerId: Int!
+  supplierName: String!
+  supplierId: Int!
+  amount: Decimal!
+  amountWithTax: Decimal!
+}
+
+type PayableDetailResponse {
+  payableDate: Time!
+  payableStatus: String!
+  transactionNumber: String!
+  transactionType: String!
+  currencyId: Int!
+  currency: AllCurrency! @goField(forceResolver: true)
+  itemName: String!
+  itemQty: Decimal!
+  supplierId: Int
+  supplierName: String
+  itemPrice: Decimal!
+  itemAmount: Decimal!
+  itemPriceFcy: Decimal!
+  itemAmountFcy: Decimal!
+}
+
+type PayableSummaryResponse {
+  payableDate: Time!
+  payableStatus: String!
+  transactionNumber: String!
+  transactionType: String!
+  currencyId: Int!
+  currency: AllCurrency! @goField(forceResolver: true)
+  supplierId: Int
+  supplierName: String
+  payableAmount: Decimal!
+  payableBalance: Decimal!
+  payableAmountFcy: Decimal!
+  payableBalanceFcy: Decimal!
+}
+
+type ReceivableSummaryResponse {
+  receivableDate: Time!
+  receivableStatus: String!
+  transactionNumber: String!
+  transactionType: String!
+  currencyId: Int!
+  currency: AllCurrency! @goField(forceResolver: true)
+  customerId: Int
+  customerName: String
+  receivableAmount: Decimal!
+  receivableBalance: Decimal!
+  receivableAmountFcy: Decimal!
+  receivableBalanceFcy: Decimal!
+}
+
+type ReceivableDetailResponse {
+  receivableDate: Time!
+  receivableStatus: String!
+  transactionNumber: String!
+  transactionType: String!
+  currencyId: Int!
+  currency: AllCurrency! @goField(forceResolver: true)
+  itemName: String!
+  itemQty: Decimal!
+  customerId: Int
+  customerName: String
+  itemPrice: Decimal!
+  itemAmount: Decimal!
+  itemPriceFcy: Decimal!
+  itemAmountFcy: Decimal!
+}
+
+type InventoryValuationSummaryResponse {
+  productId: Int!
+  productName: String!
+  productType: String!
+  sku: String!
+  unit: String!
+  stockOnHand: Decimal!
+  assetValue: Decimal!
+}
+
+type InventoryValuationResponse {
+  openingStockOnHand: Decimal!
+  openingAssetValue: Decimal!
+  details: [InventoryValuationDetail]
+  closingStockOnHand: Decimal!
+  closingAssetValue: Decimal!
+}
+
+type InventoryValuation {
+  productId: Int!
+  productType: ProductType!
+  productUnit: AllProductUnit! @goField(forceResolver: true)
+  stockOnHand: Decimal!
+  assetValue: Decimal!
+  unitCost: Decimal!
+  productDescription: String
+}
+
+type InventoryValuationDetail {
+  transactionDate: Time!
+  transactionDescription: String!
+  warehouseName: String
+  qty: Decimal!
+  unitCost: Decimal!
+  stockOnHand: Decimal!
+  assetValue: Decimal!
+}
+
+type CustomerBalance {
+  customerId: Int!
+  customerName: String!
+  invoiceBalance: Decimal!
+  customerCredit: Decimal!
+  customerAdvance: Decimal!
+  receivedAmount: Decimal!
+  closingBalance: Decimal!
+  invoiceBalanceFcy: Decimal!
+  customerCreditFcy: Decimal!
+  customerAdvanceFcy: Decimal!
+  receivedAmountFcy: Decimal!
+  closingBalanceFcy: Decimal!
+  currencySymbol: String!
+  decimalPlaces: DecimalPlaces!
+}
+
+type SupplierBalance {
+  supplierId: Int!
+  supplierName: String!
+  billBalance: Decimal!
+  supplierCredit: Decimal!
+  supplierAdvance: Decimal!
+  paidAmount: Decimal!
+  closingBalance: Decimal!
+  billBalanceFcy: Decimal!
+  supplierCreditFcy: Decimal!
+  supplierAdvanceFcy: Decimal!
+  paidAmountFcy: Decimal!
+  closingBalanceFcy: Decimal!
+  currencySymbol: String!
+  decimalPlaces: DecimalPlaces!
+}
+
+type PaymentReceived {
+  paymentNumber: String!
+  paymentDate: Time!
+  referenceNumber: String
+  customerId: Int!
+  customerName: String!
+  paymentMode: String
+  notes: String
+  invoiceNumbers: String
+  depositAccount: AllAccount @goField(forceResolver: true)
+  paymentAmount: Decimal!
+  paymentAmountFcy: Decimal!
+  unusedAmount: Decimal!
+  unusedAmountFcy: Decimal!
+  currency: AllCurrency! @goField(forceResolver: true)
+}
+
+type PaymentMade {
+  paymentNumber: String!
+  paymentDate: Time!
+  referenceNumber: String
+  supplierId: Int!
+  supplierName: String!
+  paymentMode: String
+  notes: String
+  billNumbers: String
+  withdrawAccount: AllAccount @goField(forceResolver: true)
+  paymentAmount: Decimal!
+  paymentAmountFcy: Decimal!
+  unusedAmount: Decimal!
+  unusedAmountFcy: Decimal!
+  currency: AllCurrency! @goField(forceResolver: true)
+}
+
+type CustomerRefundHistory {
+  refundDate: Time!
+  customerId: Int!
+  customerName: String!
+  transactionId: Int!
+  transactionType: String!
+  transactionNumber: String!
+  referenceNumber: String
+  paymentMode: String
+  notes: String
+  amount: Decimal!
+  amountFcy: Decimal!
+  currency: AllCurrency! @goField(forceResolver: true)
+}
+
+type SupplierRefundHistory {
+  refundDate: Time!
+  supplierId: Int!
+  supplierName: String!
+  transactionId: Int!
+  transactionType: String!
+  transactionNumber: String!
+  referenceNumber: String
+  paymentMode: String
+  notes: String
+  amount: Decimal!
+  amountFcy: Decimal!
+  currency: AllCurrency! @goField(forceResolver: true)
+}
+
+type PurchasesBySupplierResponse {
+  SupplierId: ID!
+  SupplierName: String
+  # SupplierCreditCount: Int!
+  BillCount: Int!
+  TotalPurchases: Decimal!
+  TotalPurchasesWithTax: Decimal!
+}
+
+type PurchasesByProductResponse {
+  productId: ID!
+  productName: String
+  productSku: String
+  # SupplierCreditCount: Int!
+  qtyPurchased: Decimal!
+  totalAmount: Decimal!
+  totalAmountWithDiscount: Decimal!
+  averagePrice: Decimal!
+}
+
+type CreditNoteDetailResponse {
+  creditNoteDate: Time!
+  creditNoteStatus: String!
+  customerId: Int!
+  customerName: String
+  creditNoteNumber: String!
+  currency: AllCurrency! @goField(forceResolver: true)
+  creditNoteAmountFcy: Decimal!
+  creditNoteBalanceFcy: Decimal!
+  creditNoteAmount: Decimal!
+  creditNoteBalance: Decimal!
+}
+
+type SupplierCreditDetailResponse {
+  supplierCreditDate: Time!
+  supplierCreditStatus: String!
+  supplierId: Int!
+  supplierName: String
+  supplierCreditNumber: String!
+  currency: AllCurrency! @goField(forceResolver: true)
+  supplierCreditAmountFcy: Decimal!
+  supplierCreditBalanceFcy: Decimal!
+  supplierCreditAmount: Decimal!
+  supplierCreditBalance: Decimal!
+}
+
+type ProductTransactionResponse {
+  transactionDate: Time!
+  transactionId: Int!
+  transactionType: String!
+  transactionNumber: String!
+  status: String!
+  price: Decimal!
+  qty: Decimal!
+  total: Decimal!
+  supplierName: String
+  customerName: String
+  currencySymbol: String
+  decimalPlaces: DecimalPlaces!
+}
+
+# POS
+
+input NewPosCheckout {
+  customerId: Int!
+  branchId: Int!
+  referenceNumber: String
+  invoiceDate: Time!
+  invoicePaymentTerms: PaymentTerms!
+  invoicePaymentTermsCustomDays: Int
+  salesPersonId: Int
+  invoiceSubject: String
+  notes: String
+  termsAndConditions: String
+  currencyId: Int!
+  exchangeRate: Decimal
+  warehouseId: Int!
+  invoiceDiscount: Decimal
+  invoiceDiscountType: DiscountType
+  shippingCharges: Decimal
+  adjustmentAmount: Decimal
+  isTaxInclusive: Boolean!
+  invoiceTaxId: Int
+  invoiceTaxType: TaxType
+  currentStatus: SalesInvoiceStatus!
+  details: [NewSalesInvoiceDetail!]!
+  bankCharges: Decimal
+  paymentNumber: String!
+  paymentModeId: Int
+  depositAccountId: Int
+}
+
+type Query {
+  getDocument(id: ID!): Document! @goField(forceResolver: true) @auth
+
+  getAccount(id: ID!): Account! @goField(forceResolver: true) @auth
+  listAccount(name: String, code: String): [Account]
+    @goField(forceResolver: true)
+    @auth
+  listAllAccount: [AllAccount] @goField(forceResolver: true) @auth
+  listUserAccount: [UserAccount] @goField(forceResolver: true) @auth
+  getUserAccount(userId: ID!): UserAccount! @goField(forceResolver: true) @auth
+
+  listBankingAccount: ListBankingAccountResponse
+    @goField(forceResolver: true)
+    @auth
+
+  # paginatePurchaseOrder(
+  #   limit: Int = 10
+  #   after: String
+  #   orderNumber: String
+  #   referenceNumber: String
+
+  #   branchId: Int
+  #   warehouseId: Int
+  #   supplierId: Int
+  #   currentStatus: PurchaseOrderStatus
+
+  #   startOrderDate: Time
+  #   endOrderDate: Time
+  #   startExpectedDeliveryDate: Time
+  #   endExpectedDeliveryDate: Time
+  # ): PurchaseOrdersConnection @goField(forceResolver: true) @auth
+
+  getMoneyAccount(id: ID!): MoneyAccount! @goField(forceResolver: true) @auth
+  listMoneyAccount(
+    accountType: String
+    accountName: String
+    branchId: Int
+  ): [MoneyAccount] @goField(forceResolver: true) @auth
+  listAllMoneyAccount: [AllMoneyAccount] @goField(forceResolver: true) @auth
+  paginateMoneyAccount(
+    limit: Int = 10
+    after: String
+    name: String
+  ): MoneyAccountsConnection @goField(forceResolver: true) @auth
+
+  getBranch(id: ID!): Branch! @goField(forceResolver: true) @auth
+  listBranch(name: String): [Branch] @goField(forceResolver: true) @auth
+  listAllBranch: [AllBranch] @goField(forceResolver: true) @auth
+
+  getBusinessAdmin(id: String!): Business! @goField(forceResolver: true) @auth
+  getBusiness: Business! @goField(forceResolver: true) @auth
+  getOpeningBalance(branchId: Int!): OpeningBalance!
+    @goField(forceResolver: true)
+    @auth
+  listAllBusiness: [AllBusiness] @goField(forceResolver: true) @auth
+  listTransactionLockingRecord(userId: Int): [TransactionLockingRecord]
+    @goField(forceResolver: true)
+    @auth
+  # listBusiness(name: String): [Business] @goField(forceResolver: true) @auth
+
+  getComment(id: ID!): Comment! @goField(forceResolver: true) @auth
+  listComment(referenceId: Int, referenceType: String, userId: Int): [Comment]
+    @goField(forceResolver: true)
+    @auth
+
+  getCurrency(id: ID!): Currency! @goField(forceResolver: true) @auth
+  listCurrency: [Currency] @goField(forceResolver: true) @auth
+  listAllCurrency: [AllCurrency] @goField(forceResolver: true) @auth
+
+  getCustomer(id: ID!): Customer! @goField(forceResolver: true) @auth
+  listCustomer(name: String): [Customer] @goField(forceResolver: true) @auth
+  paginateCustomer(
+    limit: Int = 10
+    after: String
+    name: String
+    phone: String
+    mobile: String
+    email: String
+    isActive: Boolean
+  ): CustomersConnection @goField(forceResolver: true) @auth
+
+  getDeliveryMethod(id: ID!): DeliveryMethod!
+    @goField(forceResolver: true)
+    @auth
+  listDeliveryMethod(name: String): [DeliveryMethod]
+    @goField(forceResolver: true)
+    @auth
+  listAllDeliveryMethod: [AllDeliveryMethod] @goField(forceResolver: true) @auth
+
+  getExpense(id: ID!): Expense! @goField(forceResolver: true) @auth
+  paginateExpense(
+    limit: Int = 10
+    after: String
+    expenseAccountId: Int
+    assetAccountId: Int
+    branchId: Int
+    fromDate: MyDateString
+    toDate: MyDateString
+    referenceNumber: String
+  ): ExpensesConnection @goField(forceResolver: true) @auth
+
+  getHistory(id: ID!): History! @goField(forceResolver: true) @auth
+  listHistory(referenceId: Int, referenceType: String, userId: Int): [History]
+    @goField(forceResolver: true)
+    @auth
+  paginateHistory(
+    limit: Int = 10
+    after: String
+    referenceType: String
+    referenceId: Int
+    userId: Int
+    actionType: String
+  ): HistoriesConnection @goField(forceResolver: true) @auth
+
+  getJournal(id: ID!): Journal! @goField(forceResolver: true) @auth
+  paginateJournal(
+    limit: Int = 10
+    after: String
+    journalNumber: String
+    fromDate: MyDateString
+    toDate: MyDateString
+    branchId: Int
+    referenceNumber: String
+  ): JournalsConnection @goField(forceResolver: true) @auth
+
+  getAccountJournalTransactions(
+    referenceId: Int!
+    referenceType: AccountReferenceType!
+  ): [AccountJournalTransaction] @goField(forceResolver: true) @auth
+
+  getModule(id: ID!): Module! @goField(forceResolver: true) @auth
+  listModule(name: String): [BaseModule] @goField(forceResolver: true) @auth
+
+  getPaymentMode(id: ID!): PaymentMode! @goField(forceResolver: true) @auth
+  listPaymentMode(name: String): [PaymentMode]
+    @goField(forceResolver: true)
+    @auth
+  listAllPaymentMode: [AllPaymentMode] @goField(forceResolver: true) @auth
+
+  getProduct(id: ID!): Product! @goField(forceResolver: true) @auth
+  paginateProduct(
+    limit: Int = 10
+    after: String
+    name: String
+    sku: String # journalNumber: String # contactId: Int # contactType: String # notes: String
+  ): ProductsConnection @goField(forceResolver: true) @auth
+  listAllProduct(name: String): [AllProduct] @goField(forceResolver: true) @auth
+
+  getProductGroup(id: ID!): ProductGroup! @goField(forceResolver: true) @auth
+  paginateProductGroup(
+    limit: Int = 10
+    after: String
+    name: String
+    sku: String
+  ): ProductGroupsConnection @goField(forceResolver: true) @auth
+
+  getProductCategory(id: ID!): ProductCategory!
+    @goField(forceResolver: true)
+    @auth
+  listProductCategory(name: String): [ProductCategory]
+    @goField(forceResolver: true)
+    @auth
+  listAllProductCategory: [AllProductCategory]
+    @goField(forceResolver: true)
+    @auth
+  paginateProductCategory(
+    limit: Int = 10
+    after: String
+    name: String
+    parentCategoryId: Int # journalNumber: String # contactId: Int # contactType: String # notes: String
+  ): ProductCategoriesConnection @goField(forceResolver: true) @auth
+
+  getProductModifier(id: ID!): ProductModifier!
+    @goField(forceResolver: true)
+    @auth
+  listProductModifier(name: String): [ProductModifier]
+    @goField(forceResolver: true)
+    @auth
+  listAllProductModifier: [AllProductModifier]
+    @goField(forceResolver: true)
+    @auth
+  paginateProductModifier(
+    limit: Int = 10
+    after: String
+    name: String # parentModifierId: Int # journalNumber: String # contactId: Int # contactType: String # notes: String
+  ): ProductModifiersConnection @goField(forceResolver: true) @auth
+
+  getProductUnit(id: ID!): ProductUnit! @goField(forceResolver: true) @auth
+  listProductUnit(name: String): [ProductUnit]
+    @goField(forceResolver: true)
+    @auth
+  listAllProductUnit: [AllProductUnit] @goField(forceResolver: true) @auth
+  paginateProductUnit(
+    limit: Int = 10
+    after: String
+    name: String # parentUnitId: Int # journalNumber: String # contactId: Int # contactType: String # notes: String
+  ): ProductUnitsConnection @goField(forceResolver: true) @auth
+
+  getProductVariant(id: ID!): ProductVariant!
+    @goField(forceResolver: true)
+    @auth
+  listAllProductVariant(name: String): [AllProductVariant]
+    @goField(forceResolver: true)
+    @auth
+  paginateProductVariant(
+    limit: Int = 10
+    groupId: Int!
+    after: String
+    name: String
+  ): ProductVariantsConnection @goField(forceResolver: true) @auth
+
+  getReason(id: ID!): Reason! @goField(forceResolver: true) @auth
+  listAllReason: [AllReason] @goField(forceResolver: true) @auth
+
+  getRole(id: ID!): Role! @goField(forceResolver: true) @auth
+  listRole(name: String): [Role] @goField(forceResolver: true) @auth
+  # listActiveRole: [ActiveRole] @goField(forceResolver: true) @auth
+
+  listRoleModule(roleId: ID): [RoleModule] @goField(forceResolver: true) @auth
+
+  getSalesPerson(id: ID!): SalesPerson! @goField(forceResolver: true) @auth
+  listSalesPerson(name: String): [SalesPerson]
+    @goField(forceResolver: true)
+    @auth
+  listAllSalesPerson: [AllSalesPerson] @goField(forceResolver: true) @auth
+  paginateSalesPerson(
+    limit: Int = 10
+    after: String
+    name: String
+  ): SalesPersonsConnection @goField(forceResolver: true) @auth
+
+  getSalesOrder(id: ID!): SalesOrder! @goField(forceResolver: true) @auth
+  paginateSalesOrder(
+    limit: Int = 10
+    after: String
+
+    orderNumber: String
+    referenceNumber: String
+    branchId: Int
+    warehouseId: Int
+    customerId: Int
+    status: SalesOrderStatus
+
+    startOrderDate: MyDateString
+    endOrderDate: MyDateString
+    startExpectedShipmentDate: MyDateString
+    endExpectedShipmentDate: MyDateString
+  ): SalesOrdersConnection @goField(forceResolver: true) @auth
+
+  getSalesInvoice(id: ID!): SalesInvoice! @goField(forceResolver: true) @auth
+  paginateSalesInvoice(
+    limit: Int = 10
+    after: String
+
+    invoiceNumber: String
+    referenceNumber: String
+    branchId: Int
+    warehouseId: Int
+    customerId: Int
+    status: SalesInvoiceStatus
+
+    startInvoiceDate: MyDateString
+    endInvoiceDate: MyDateString
+    startInvoiceDueDate: MyDateString
+    endInvoiceDueDate: MyDateString
+  ): SalesInvoicesConnection @goField(forceResolver: true) @auth
+
+  getShipmentPreference(id: ID!): ShipmentPreference!
+    @goField(forceResolver: true)
+    @auth
+  listAllShipmentPreference: [AllShipmentPreference]
+    @goField(forceResolver: true)
+    @auth
+
+  getCustomerPayment(id: ID!): CustomerPayment!
+    @goField(forceResolver: true)
+    @auth
+  paginateCustomerPayment(
+    limit: Int = 10
+    after: String
+
+    paymentNumber: String
+    referenceNumber: String
+    branchId: Int
+    customerId: Int
+    withdrawAccountId: Int
+
+    startPaymentDate: MyDateString
+    endPaymentDate: MyDateString
+  ): CustomerPaymentsConnection @goField(forceResolver: true) @auth
+
+  getCreditNote(id: ID!): CreditNote! @goField(forceResolver: true) @auth
+  paginateCreditNote(
+    limit: Int = 10
+    after: String
+
+    creditNoteNumber: String
+    referenceNumber: String
+    branchId: Int
+    warehouseId: Int
+    customerId: Int
+    status: CreditNoteStatus
+
+    startCreditNoteDate: MyDateString
+    endCreditNoteDate: MyDateString
+  ): CreditNotesConnection @goField(forceResolver: true) @auth
+
+  getUnusedCustomerCredits(branchId: Int!, customerId: Int!): [CreditNote]
+    @goField(forceResolver: true)
+    @auth
+
+  getUnusedCustomerCreditAdvances(
+    branchId: Int!
+    customerId: Int!
+  ): [CustomerCreditAdvance] @goField(forceResolver: true) @auth
+
+  getState(id: ID!): State! @goField(forceResolver: true) @auth
+  listState(country: String, code: String, orderBy: String): [State]
+    @goField(forceResolver: true)
+    @auth
+  listAllState: [AllState] @goField(forceResolver: true) @auth
+  paginateState(
+    limit: Int = 10
+    after: String
+    country: String
+    code: String
+    postalCode: String
+    name: String # sku: String # journalNumber: String # contactId: Int # contactType: String # notes: String
+  ): StatesConnection @goField(forceResolver: true) @auth
+
+  getSupplier(id: ID!): Supplier! @goField(forceResolver: true) @auth
+  paginateSupplier(
+    limit: Int = 10
+    after: String
+    name: String
+    phone: String
+    mobile: String
+    email: String
+    isActive: Boolean
+  ): SuppliersConnection @goField(forceResolver: true) @auth
+
+  getTax(id: ID!): Tax! @goField(forceResolver: true) @auth
+  listTax(name: String): [Tax] @goField(forceResolver: true) @auth
+  listAllTax: [AllTax] @goField(forceResolver: true) @auth
+
+  getTaxGroup(id: ID!): TaxGroup! @goField(forceResolver: true) @auth
+  listTaxGroup(name: String): [TaxGroup] @goField(forceResolver: true) @auth
+  listAllTaxGroup: [AllTaxGroup] @goField(forceResolver: true) @auth
+
+  getTownship(id: ID!): Township! @goField(forceResolver: true) @auth
+  listTownship(stateCode: String, code: String, orderBy: String): [Township]
+    @goField(forceResolver: true)
+    @auth
+  listAllTownship: [AllTownship] @goField(forceResolver: true) @auth
+  paginateTownship(
+    limit: Int = 10
+    after: String
+    country: String
+    code: String
+    stateCode: String
+    postalCode: String
+    name: String # sku: String # journalNumber: String # contactId: Int # contactType: String # notes: String
+  ): TownshipsConnection @goField(forceResolver: true) @auth
+
+  getTransactionNumberSeries(id: ID!): TransactionNumberSeries!
+    @goField(forceResolver: true)
+    @auth
+  listTransactionNumberSeries(name: String): [TransactionNumberSeries]
+    @goField(forceResolver: true)
+    @auth
+
+  getUser(id: ID!): User! @goField(forceResolver: true) @auth
+
+  getWarehouse(id: ID!): Warehouse! @goField(forceResolver: true) @auth
+  listWarehouse(name: String): [Warehouse] @goField(forceResolver: true) @auth
+  listAllWarehouse: [AllWarehouse] @goField(forceResolver: true) @auth
+
+  getPurchaseOrder(id: ID!): PurchaseOrder! @goField(forceResolver: true) @auth
+  paginatePurchaseOrder(
+    limit: Int = 10
+    after: String
+
+    orderNumber: String
+    referenceNumber: String
+    branchId: Int
+    warehouseId: Int
+    supplierId: Int
+    currentStatus: PurchaseOrderStatus
+
+    startOrderDate: MyDateString
+    endOrderDate: MyDateString
+    startExpectedDeliveryDate: MyDateString
+    endExpectedDeliveryDate: MyDateString
+  ): PurchaseOrdersConnection @goField(forceResolver: true) @auth
+
+  getBill(id: ID!): Bill! @goField(forceResolver: true) @auth
+  paginateBill(
+    limit: Int = 10
+    after: String
+
+    billNumber: String
+    referenceNumber: String
+    branchId: Int
+    warehouseId: Int
+    supplierId: Int
+    currentStatus: BillStatus
+
+    startBillDate: MyDateString
+    endBillDate: MyDateString
+    startBillDueDate: MyDateString
+    endBillDueDate: MyDateString
+  ): BillsConnection @goField(forceResolver: true) @auth
+
+  getSupplierPayment(id: ID!): SupplierPayment!
+    @goField(forceResolver: true)
+    @auth
+  paginateSupplierPayment(
+    limit: Int = 10
+    after: String
+
+    paymentNumber: String
+    referenceNumber: String
+    branchId: Int
+    supplierId: Int
+    withdrawAccountId: Int
+
+    startPaymentDate: MyDateString
+    endPaymentDate: MyDateString
+  ): SupplierPaymentsConnection @goField(forceResolver: true) @auth
+
+  getRecurringBill(id: ID!): RecurringBill! @goField(forceResolver: true) @auth
+  paginateRecurringBill(
+    limit: Int = 10
+    after: String
+    name: String
+  ): RecurringBillsConnection @goField(forceResolver: true) @auth
+
+  getSupplierCredit(id: ID!): SupplierCredit!
+    @goField(forceResolver: true)
+    @auth
+
+  getUnusedSupplierCredits(branchId: Int!, supplierId: Int!): [SupplierCredit]
+    @goField(forceResolver: true)
+    @auth
+
+  getUnusedSupplierCreditAdvances(
+    branchId: Int!
+    supplierId: Int!
+  ): [SupplierCreditAdvance] @goField(forceResolver: true) @auth
+
+  paginateSupplierCredit(
+    limit: Int = 10
+    after: String
+
+    supplierCreditNumber: String
+    referenceNumber: String
+    branchId: Int
+    warehouseId: Int
+    supplierId: Int
+    currentStatus: SupplierCreditStatus
+
+    startSupplierCreditDate: MyDateString
+    endSupplierCreditDate: MyDateString # startBillDueDate: Time # endBillDueDate: Time
+  ): SupplierCreditsConnection @goField(forceResolver: true) @auth
+  # Reports
+  paginateJournalReport(
+    limit: Int = 10
+    after: String
+    fromDate: MyDateString!
+    toDate: MyDateString!
+    reportType: String!
+    branchId: Int
+  ): JournalReportConnection @goField(forceResolver: true) @auth
+
+  getAllJournalReport(
+    fromDate: MyDateString!
+    toDate: MyDateString!
+    reportType: String!
+    branchId: Int
+  ): [AccountJournal] @goField(forceResolver: true) @auth
+
+  paginateAccountTransactionReport(
+    limit: Int = 10
+    after: String
+    fromDate: MyDateString!
+    toDate: MyDateString!
+    reportType: String!
+    branchId: Int
+    accountIds: [Int!]
+  ): AccountTransactionReportConnection @goField(forceResolver: true) @auth
+
+  getAllAccountTransactionReport(
+    fromDate: MyDateString!
+    toDate: MyDateString!
+    reportType: String!
+    branchId: Int
+    accountIds: [Int!]
+  ): [AccountTransaction] @goField(forceResolver: true) @auth
+
+  paginateDetailedGeneralLedgerReport(
+    limit: Int = 10
+    after: String
+    fromDate: MyDateString!
+    toDate: MyDateString!
+    reportType: String!
+    branchId: Int
+  ): DetailedGeneralLedgerReportConnection @goField(forceResolver: true) @auth
+
+  getAllDetailedGeneralLedgerReport(
+    fromDate: MyDateString!
+    toDate: MyDateString!
+    reportType: String!
+    branchId: Int
+  ): [DetailedGeneralLedger] @goField(forceResolver: true) @auth
+
+  getGeneralLedgerReport(
+    fromDate: MyDateString!
+    toDate: MyDateString!
+    reportType: String!
+    branchId: Int
+  ): [AccountSummary] @goField(forceResolver: true) @auth
+
+  getAccountTypeSummaryReport(
+    fromDate: MyDateString!
+    toDate: MyDateString!
+    reportType: String!
+    branchId: Int
+  ): [AccountSummaryGroup] @goField(forceResolver: true) @auth
+
+  getTrialBalanceReport(
+    toDate: MyDateString!
+    reportType: String!
+    branchId: Int
+  ): [TrialBalance] @goField(forceResolver: true) @auth
+
+  getBalanceSheetReport(
+    fromDate: MyDateString
+    toDate: MyDateString!
+    reportType: String!
+    branchId: Int
+  ): [BalanceSheetResponse] @goField(forceResolver: true) @auth
+
+  getProfitAndLossReport(
+    fromDate: MyDateString!
+    toDate: MyDateString!
+    reportType: String!
+    branchId: Int
+  ): [ProfitAndLossResponse] @goField(forceResolver: true) @auth
+
+  getCashFlowReport(
+    fromDate: MyDateString!
+    toDate: MyDateString!
+    reportType: String!
+    branchId: Int
+  ): [CashFlowResponse] @goField(forceResolver: true) @auth
+
+  getMovementOfEquityReport(
+    fromDate: MyDateString!
+    toDate: MyDateString!
+    reportType: String!
+    branchId: Int
+  ): [MovementOfEquityResponse] @goField(forceResolver: true) @auth
+
+  getSalesByCustomerReport(
+    branchId: Int
+    fromDate: MyDateString!
+    toDate: MyDateString!
+  ): [SalesByCustomerResponse] @goField(forceResolver: true) @auth
+
+  getSalesBySalesPersonReport(
+    branchId: Int
+    fromDate: MyDateString!
+    toDate: MyDateString!
+  ): [SalesBySalesPersonResponse] @goField(forceResolver: true) @auth
+
+  getTransferOrder(id: ID!): TransferOrder! @goField(forceResolver: true) @auth
+  paginateTransferOrder(
+    limit: Int = 10
+    after: String
+    orderNumber: String
+    currentStatus: TransferOrderStatus
+  ): TransferOrdersConnection @goField(forceResolver: true) @auth
+
+  getInventoryAdjustment(id: ID!): InventoryAdjustment!
+    @goField(forceResolver: true)
+    @auth
+  paginateInventoryAdjustment(
+    limit: Int = 10
+    after: String
+    referenceNumber: String
+    branchId: Int
+    warehouseId: Int
+    accountId: Int
+    currentStatus: InventoryAdjustmentStatus
+    adjustmentType: InventoryAdjustmentType
+    startDate: MyDateString
+    endDate: MyDateString
+  ): InventoryAdjustmentsConnection @goField(forceResolver: true) @auth
+
+  getAvailableStocks(warehouseId: Int!): [StockSummary]
+    @goField(forceResolver: true)
+    @auth
+  getInventorySummaryReport(
+    toDate: MyDateString!
+    warehouseId: Int
+  ): [InventorySummaryResponse] @goField(forceResolver: true) @auth
+  getWarehouseInventoryReport(
+    toDate: MyDateString!
+  ): [WarehouseInventoryResponse] @goField(forceResolver: true) @auth
+  getSalesByProductReport(
+    fromDate: MyDateString!
+    toDate: MyDateString!
+    branchId: Int
+    warehouseId: Int
+    sku: String
+    productName: String
+  ): [SalesByProductResponse] @goField(forceResolver: true) @auth
+
+  getBankingTransaction(id: ID!): BankingTransaction!
+    @goField(forceResolver: true)
+    @auth
+  paginateBankingTransaction(
+    limit: Int = 10
+    after: String
+    referenceNumber: String
+    branchId: Int
+    accountId: Int
+    startDate: MyDateString
+    endDate: MyDateString
+  ): BankingTransactionsConnection @goField(forceResolver: true) @auth
+
+  getProductSalesReport(
+    fromDate: MyDateString!
+    toDate: MyDateString!
+    branchId: Int
+  ): [ProductSalesReportResponse] @goField(forceResolver: true) @auth
+
+  getStockSummaryReport(
+    fromDate: MyDateString!
+    toDate: MyDateString!
+    # branchId: Int
+    warehouseId: Int
+  ): [StockSummaryReportResponse] @goField(forceResolver: true) @auth
+  getARAgingSummaryReport(
+    currentDate: MyDateString!
+    branchId: Int
+    warehouseId: Int
+  ): [ARAgingSummaryResponse] @goField(forceResolver: true) @auth
+  getAPAgingSummaryReport(
+    currentDate: MyDateString!
+    branchId: Int
+    warehouseId: Int
+  ): [APAgingSummaryResponse] @goField(forceResolver: true) @auth
+  getARAgingDetailReport(
+    currentDate: MyDateString!
+    branchId: Int
+    warehouseId: Int
+  ): [ARAgingDetailResponse] @goField(forceResolver: true) @auth
+  getAPAgingDetailReport(
+    currentDate: MyDateString!
+    branchId: Int
+    warehouseId: Int
+  ): [APAgingDetailResponse] @goField(forceResolver: true) @auth
+  getPurchaseOrderDetailReport(
+    fromDate: MyDateString!
+    toDate: MyDateString!
+    branchId: Int
+    warehouseId: Int
+  ): [PurchaseOrderDetailResponse] @goField(forceResolver: true) @auth
+  getBillDetailReport(
+    fromDate: MyDateString!
+    toDate: MyDateString!
+    branchId: Int
+    warehouseId: Int
+  ): [BillDetailResponse] @goField(forceResolver: true) @auth
+  getSalesOrderDetailReport(
+    fromDate: MyDateString!
+    toDate: MyDateString!
+    branchId: Int
+    warehouseId: Int
+  ): [SalesOrderDetailResponse] @goField(forceResolver: true) @auth
+  getSalesInvoiceDetailReport(
+    fromDate: MyDateString!
+    toDate: MyDateString!
+    branchId: Int
+    warehouseId: Int
+  ): [SalesInvoiceDetailResponse] @goField(forceResolver: true) @auth
+  getTotalPayableReceivable: [PayableReceivableResponse]
+    @goField(forceResolver: true)
+    @auth
+  getTotalIncomeExpense(filterType: String!): IncomeExpenseReponse
+    @goField(forceResolver: true)
+    @auth
+  getTopExpense(
+    startDate: MyDateString
+    endDate: MyDateString
+    filterType: String!
+  ): [TopExpensesResponse] @goField(forceResolver: true) @auth
+  getTotalCashFlow(filterType: String!): CashFlowReponse
+    @goField(forceResolver: true)
+    @auth
+  getExpenseDetailReport(
+    startDate: MyDateString!
+    endDate: MyDateString!
+  ): [ExpenseDetail] @goField(forceResolver: true) @auth
+  getExpenseSummaryByCategory(
+    startDate: MyDateString!
+    endDate: MyDateString!
+  ): ExpenseSummaryByCategory @goField(forceResolver: true) @auth
+  getExpenseByCategory(
+    accountId: Int!
+    startDate: MyDateString!
+    endDate: MyDateString!
+  ): [ExpenseByCategory] @goField(forceResolver: true) @auth
+  getPayableDetailReport(
+    startDate: MyDateString!
+    endDate: MyDateString!
+    supplierId: Int
+    branchId: Int
+    warehouseId: Int
+  ): [PayableDetailResponse] @goField(forceResolver: true) @auth
+  getPayableSummaryReport(
+    startDate: MyDateString!
+    endDate: MyDateString!
+    supplierId: Int
+    branchId: Int
+    warehouseId: Int
+  ): [PayableSummaryResponse] @goField(forceResolver: true) @auth
+
+  getReceivableSummaryReport(
+    startDate: MyDateString!
+    endDate: MyDateString!
+    customerId: Int
+    branchId: Int
+    warehouseId: Int
+  ): [ReceivableSummaryResponse] @goField(forceResolver: true) @auth
+
+  getReceivableDetailReport(
+    startDate: MyDateString!
+    endDate: MyDateString!
+    customerId: Int
+    branchId: Int
+    warehouseId: Int
+  ): [ReceivableDetailResponse] @goField(forceResolver: true) @auth
+
+  getInventoryValuationSummaryReport(
+    currentDate: MyDateString!
+    warehouseId: Int!
+  ): [InventoryValuationSummaryResponse] @goField(forceResolver: true) @auth
+  getInventoryValuation(
+    startDate: MyDateString!
+    endDate: MyDateString!
+    productId: Int!
+    productType: ProductType!
+    warehouseId: Int!
+  ): InventoryValuationResponse @goField(forceResolver: true) @auth
+  getClosingInventory(
+    currentDate: MyDateString!
+    warehouseId: Int!
+    productId: Int
+    productType: ProductType
+    batchNumber: String
+  ): [InventoryValuation] @goField(forceResolver: true) @auth
+  getCustomerBalancesReport(
+    endDate: MyDateString
+    branchId: Int = 0
+  ): [CustomerBalance] @goField(forceResolver: true) @auth
+  getSupplierBalancesReport(
+    endDate: MyDateString
+    branchId: Int = 0
+  ): [SupplierBalance] @goField(forceResolver: true) @auth
+  getCustomerBalanceSummaryReport(
+    endDate: MyDateString
+    branchId: Int = 0
+  ): [CustomerBalance] @goField(forceResolver: true) @auth
+  getSupplierBalanceSummaryReport(
+    endDate: MyDateString
+    branchId: Int = 0
+  ): [SupplierBalance] @goField(forceResolver: true) @auth
+  getPaymentsReceived(
+    fromDate: MyDateString!
+    toDate: MyDateString!
+  ): [PaymentReceived] @goField(forceResolver: true) @auth
+  getPaymentsMade(
+    fromDate: MyDateString!
+    toDate: MyDateString!
+  ): [PaymentMade] @goField(forceResolver: true) @auth
+  getCustomerRefundHistoryReport(
+    fromDate: MyDateString!
+    toDate: MyDateString!
+  ): [CustomerRefundHistory] @goField(forceResolver: true) @auth
+  getSupplierRefundHistoryReport(
+    fromDate: MyDateString!
+    toDate: MyDateString!
+  ): [SupplierRefundHistory] @goField(forceResolver: true) @auth
+
+  getPurchasesBySupplierReport(
+    branchId: Int
+    fromDate: MyDateString!
+    toDate: MyDateString!
+  ): [PurchasesBySupplierResponse] @goField(forceResolver: true) @auth
+
+  getPurchasesByProductReport(
+    fromDate: MyDateString!
+    toDate: MyDateString!
+    branchId: Int
+    warehouseId: Int
+    sku: String
+    productName: String
+  ): [PurchasesByProductResponse] @goField(forceResolver: true) @auth
+
+  getCreditNoteDetailsReport(
+    fromDate: MyDateString!
+    toDate: MyDateString!
+    branchId: Int
+    warehouseId: Int
+  ): [CreditNoteDetailResponse] @goField(forceResolver: true) @auth
+
+  getSupplierCreditDetailsReport(
+    fromDate: MyDateString!
+    toDate: MyDateString!
+    branchId: Int
+    warehouseId: Int
+  ): [SupplierCreditDetailResponse] @goField(forceResolver: true) @auth
+
+  getUnrealisedExchangeGainLossReport(
+    branchId: Int
+    toDate: MyDateString!
+    rates: [UserDefinedExchangeRate!]!
+  ): [UnrealisedExchangeGainLossResponse] @goField(forceResolver: true) @auth
+
+  getRealisedExchangeGainLossReport(
+    branchId: Int
+    fromDate: MyDateString!
+    toDate: MyDateString!
+  ): [RealisedExchangeGainLossResponse] @goField(forceResolver: true) @auth
+
+  getReceivableOpeningBalanceDetails(
+    branchId: Int!
+  ): [ReceivableOpeningBalanceDetail] @goField(forceResolver: true) @auth
+
+  getPayableOpeningBalanceDetails(
+    branchId: Int!
+  ): [PayableOpeningBalanceDetail] @goField(forceResolver: true) @auth
+
+  getStockOpeningBalanceDetails(
+    branchId: Int!
+    accountId: Int!
+  ): [StockOpeningBalanceDetail] @goField(forceResolver: true) @auth
+
+  getProductTransactions(
+    productId: Int!
+    productType: ProductType!
+    transactionType: String
+  ): [ProductTransactionResponse] @goField(forceResolver: true) @auth
+
+  getIntegrationCreds(bizId: String!, provider: String!): String!
+    @goField(forceResolver: true)
+}
+
+type Mutation {
+  login(username: String!, password: String!): LoginInfo!
+    @goField(forceResolver: true)
+  logout: Boolean! @goField(forceResolver: true) @auth
+  register(input: NewUser!): User! @goField(forceResolver: true) @auth
+  clearRedis: String! @goField(forceResolver: true) @auth
+  changePassword(oldPassword: String!, newPassword: String!): User!
+    @goField(forceResolver: true)
+    @auth
+
+  createUserAccount(input: NewUserAccount!): UserAccount!
+    @goField(forceResolver: true)
+    @auth
+  updateUserAccount(id: ID!, input: NewUserAccount!): UserAccount!
+    @goField(forceResolver: true)
+    @auth
+  deleteUserAccount(userId: ID!): UserAccount!
+    @goField(forceResolver: true)
+    @auth
+  toggleActiveUserAccount(userId: ID!, isActive: Boolean!): UserAccount!
+    @goField(forceResolver: true)
+    @auth
+
+  createAccount(input: NewAccount!): Account!
+    @goField(forceResolver: true)
+    @auth
+  updateAccount(id: ID!, input: NewAccount!): Account!
+    @goField(forceResolver: true)
+    @auth
+  deleteAccount(id: ID!): Account! @goField(forceResolver: true) @auth
+  toggleActiveAccount(id: ID!, isActive: Boolean!): Account!
+    @goField(forceResolver: true)
+    @auth
+
+  updateOpeningBalance(input: NewOpeningBalance!): OpeningBalance!
+    @goField(forceResolver: true)
+    @auth
+
+  createMoneyAccount(input: NewMoneyAccount!): MoneyAccount!
+    @goField(forceResolver: true)
+    @auth
+  updateMoneyAccount(id: ID!, input: NewMoneyAccount!): MoneyAccount!
+    @goField(forceResolver: true)
+    @auth
+  deleteMoneyAccount(id: ID!): MoneyAccount! @goField(forceResolver: true) @auth
+  toggleActiveMoneyAccount(id: ID!, isActive: Boolean!): MoneyAccount!
+    @goField(forceResolver: true)
+    @auth
+
+  createBranch(input: NewBranch!): Branch! @goField(forceResolver: true) @auth
+  updateBranch(id: ID!, input: NewBranch!): Branch!
+    @goField(forceResolver: true)
+    @auth
+  deleteBranch(id: ID!): Branch! @goField(forceResolver: true) @auth
+  toggleActiveBranch(id: ID!, isActive: Boolean!): Branch!
+    @goField(forceResolver: true)
+    @auth
+
+  createBusiness(input: NewBusiness!): Business!
+    @goField(forceResolver: true)
+    @auth
+  updateBusiness(input: NewBusiness!): Business!
+    @goField(forceResolver: true)
+    @auth
+  updateTransactionLocking(input: NewTransactionLocking!): Business!
+    @goField(forceResolver: true)
+    @auth
+  updateTaxSetting(input: NewTaxSetting!): Business!
+    @goField(forceResolver: true)
+    @auth
+  reconcileAccounting(businessId: String!): Boolean!
+    @goField(forceResolver: true)
+    @auth
+  toggleActiveBusiness(id: UUID!, isActive: Boolean!): Business!
+    @goField(forceResolver: true)
+    @auth
+
+  createComment(input: NewComment!): Comment!
+    @goField(forceResolver: true)
+    @auth
+  deleteComment(id: ID!): Comment! @goField(forceResolver: true) @auth
+
+  createCurrency(input: NewCurrency!): Currency!
+    @goField(forceResolver: true)
+    @auth
+  updateCurrency(id: ID!, input: NewCurrency!): Currency!
+    @goField(forceResolver: true)
+    @auth
+  deleteCurrency(id: ID!): Currency! @goField(forceResolver: true) @auth
+  toggleActiveCurrency(id: ID!, isActive: Boolean!): Currency!
+    @goField(forceResolver: true)
+    @auth
+
+  createCustomer(input: NewCustomer!): Customer!
+    @goField(forceResolver: true)
+    @auth
+  updateCustomer(id: ID!, input: NewCustomer!): Customer!
+    @goField(forceResolver: true)
+    @auth
+  deleteCustomer(id: ID!): Customer! @goField(forceResolver: true) @auth
+  toggleActiveCustomer(id: ID!, isActive: Boolean!): Customer!
+    @goField(forceResolver: true)
+    @auth
+
+  createDeliveryMethod(input: NewDeliveryMethod!): DeliveryMethod!
+    @goField(forceResolver: true)
+    @auth
+  updateDeliveryMethod(id: ID!, input: NewDeliveryMethod!): DeliveryMethod!
+    @goField(forceResolver: true)
+    @auth
+  deleteDeliveryMethod(id: ID!): DeliveryMethod!
+    @goField(forceResolver: true)
+    @auth
+  toggleActiveDeliveryMethod(id: ID!, isActive: Boolean!): DeliveryMethod!
+    @goField(forceResolver: true)
+    @auth
+
+  createExpense(input: NewExpense!): Expense!
+    @goField(forceResolver: true)
+    @auth
+  updateExpense(id: ID!, input: NewExpense!): Expense!
+    @goField(forceResolver: true)
+    @auth
+  deleteExpense(id: ID!): Expense! @goField(forceResolver: true) @auth
+
+  createHistory(input: NewHistory!): History!
+    @goField(forceResolver: true)
+    @auth
+  deleteHistory(id: ID!): History! @goField(forceResolver: true) @auth
+
+  createJournal(input: NewJournal!): Journal!
+    @goField(forceResolver: true)
+    @auth
+  updateJournal(id: ID!, input: NewJournal!): Journal!
+    @goField(forceResolver: true)
+    @auth
+  deleteJournal(id: ID!): Journal! @goField(forceResolver: true) @auth
+
+  createModule(input: NewModule!): Module! @goField(forceResolver: true) @auth
+  updateModule(id: ID!, input: NewModule!): Module!
+    @goField(forceResolver: true)
+    @auth
+  deleteModule(id: ID!): Module! @goField(forceResolver: true) @auth
+
+  createPaymentMode(input: NewPaymentMode!): PaymentMode!
+    @goField(forceResolver: true)
+    @auth
+  updatePaymentMode(id: ID!, input: NewPaymentMode!): PaymentMode!
+    @goField(forceResolver: true)
+    @auth
+  deletePaymentMode(id: ID!): PaymentMode! @goField(forceResolver: true) @auth
+  toggleActivePaymentMode(id: ID!, isActive: Boolean!): PaymentMode!
+    @goField(forceResolver: true)
+    @auth
+
+  createProduct(input: NewProduct!): Product!
+    @goField(forceResolver: true)
+    @auth
+  updateProduct(id: ID!, input: NewProduct!): Product!
+    @goField(forceResolver: true)
+    @auth
+  deleteProduct(id: ID!): Product! @goField(forceResolver: true) @auth
+  toggleActiveProduct(id: ID!, isActive: Boolean!): Product!
+    @goField(forceResolver: true)
+    @auth
+  importProduct(file: Upload!): String! @goField(forceResolver: true) @auth
+
+  createProductGroup(input: NewProductGroup!): ProductGroup!
+    @goField(forceResolver: true)
+    @auth
+  updateProductGroup(id: ID!, input: NewProductGroup!): ProductGroup!
+    @goField(forceResolver: true)
+    @auth
+  deleteProductGroup(id: ID!): ProductGroup! @goField(forceResolver: true) @auth
+  toggleActiveProductGroup(id: ID!, isActive: Boolean!): ProductGroup!
+    @goField(forceResolver: true)
+    @auth
+  createOpeningStockGroup(
+    groupId: Int!
+    input: [NewOpeningStockGroup]
+  ): [ProductStock] @goField(forceResolver: true) @auth
+
+  createProductCategory(input: NewProductCategory!): ProductCategory!
+    @goField(forceResolver: true)
+    @auth
+  updateProductCategory(id: ID!, input: NewProductCategory!): ProductCategory!
+    @goField(forceResolver: true)
+    @auth
+  deleteProductCategory(id: ID!): ProductCategory!
+    @goField(forceResolver: true)
+    @auth
+  toggleActiveProductCategory(id: ID!, isActive: Boolean!): ProductCategory!
+    @goField(forceResolver: true)
+    @auth
+
+  createProductModifier(input: NewProductModifier!): ProductModifier!
+    @goField(forceResolver: true)
+    @auth
+  updateProductModifier(id: ID!, input: NewProductModifier!): ProductModifier!
+    @goField(forceResolver: true)
+    @auth
+  deleteProductModifier(id: ID!): ProductModifier!
+    @goField(forceResolver: true)
+    @auth
+  toggleActiveProductModifier(id: ID!, isActive: Boolean!): ProductModifier!
+    @goField(forceResolver: true)
+    @auth
+
+  createProductUnit(input: NewProductUnit!): ProductUnit!
+    @goField(forceResolver: true)
+    @auth
+  updateProductUnit(id: ID!, input: NewProductUnit!): ProductUnit!
+    @goField(forceResolver: true)
+    @auth
+  deleteProductUnit(id: ID!): ProductUnit! @goField(forceResolver: true) @auth
+  toggleActiveProductUnit(id: ID!, isActive: Boolean!): ProductUnit!
+    @goField(forceResolver: true)
+    @auth
+
+  createProductVariant(input: NewProductVariant!): ProductVariant!
+    @goField(forceResolver: true)
+    @auth
+  updateProductVariant(id: ID!, input: NewProductVariant!): ProductVariant!
+    @goField(forceResolver: true)
+    @auth
+  deleteProductVariant(id: ID!): ProductVariant!
+    @goField(forceResolver: true)
+    @auth
+  toggleActiveProductVariant(id: ID!, isActive: Boolean!): ProductVariant!
+    @goField(forceResolver: true)
+    @auth
+
+  createReason(input: NewReason!): Reason! @goField(forceResolver: true) @auth
+  updateReason(id: ID!, input: NewReason!): Reason!
+    @goField(forceResolver: true)
+    @auth
+  deleteReason(id: ID!): Reason! @goField(forceResolver: true) @auth
+  toggleActiveReason(id: ID!, isActive: Boolean!): Reason!
+    @goField(forceResolver: true)
+    @auth
+
+  createRole(input: NewRole!): Role! @goField(forceResolver: true) @auth
+  updateRole(id: ID!, input: NewRole!): Role!
+    @goField(forceResolver: true)
+    @auth
+  deleteRole(id: ID!): Role! @goField(forceResolver: true) @auth
+
+  saveRoleModule(input: NewRoleModule!): RoleModule!
+    @goField(forceResolver: true)
+    @auth
+  deleteRoleModule(input: NewRoleModule!): RoleModule!
+    @goField(forceResolver: true)
+    @auth
+
+  createSalesPerson(input: NewSalesPerson!): SalesPerson!
+    @goField(forceResolver: true)
+    @auth
+  updateSalesPerson(id: ID!, input: NewSalesPerson!): SalesPerson!
+    @goField(forceResolver: true)
+    @auth
+  deleteSalesPerson(id: ID!): SalesPerson! @goField(forceResolver: true) @auth
+  toggleActiveSalesPerson(id: ID!, isActive: Boolean!): SalesPerson!
+    @goField(forceResolver: true)
+    @auth
+
+  createSalesOrder(input: NewSalesOrder!): SalesOrder!
+    @goField(forceResolver: true)
+    @auth
+  updateSalesOrder(id: ID!, input: NewSalesOrder!): SalesOrder!
+    @goField(forceResolver: true)
+    @auth
+  deleteSalesOrder(id: ID!): SalesOrder! @goField(forceResolver: true) @auth
+  confirmSalesOrder(id: ID!): SalesOrder! @goField(forceResolver: true) @auth
+  cancelSalesOrder(id: ID!): SalesOrder! @goField(forceResolver: true) @auth
+
+  createSalesInvoice(input: NewSalesInvoice!): SalesInvoice!
+    @goField(forceResolver: true)
+    @auth
+  updateSalesInvoice(id: ID!, input: NewSalesInvoice!): SalesInvoice!
+    @goField(forceResolver: true)
+    @auth
+  deleteSalesInvoice(id: ID!): SalesInvoice! @goField(forceResolver: true) @auth
+  confirmSalesInvoice(id: ID!): SalesInvoice!
+    @goField(forceResolver: true)
+    @auth
+  voidSalesInvoice(id: ID!): SalesInvoice! @goField(forceResolver: true) @auth
+  writeOffSalesInvoice(id: ID!, date: Time!, reason: String!): SalesInvoice!
+    @goField(forceResolver: true)
+    @auth
+  cancelWriteOffSalesInvoice(id: ID!): SalesInvoice!
+    @goField(forceResolver: true)
+    @auth
+
+  createCustomerPayment(input: NewCustomerPayment!): CustomerPayment!
+    @goField(forceResolver: true)
+    @auth
+  updateCustomerPayment(id: ID!, input: NewCustomerPayment!): CustomerPayment!
+    @goField(forceResolver: true)
+    @auth
+  deleteCustomerPayment(id: ID!): CustomerPayment!
+    @goField(forceResolver: true)
+    @auth
+
+  createCreditNote(input: NewCreditNote!): CreditNote!
+    @goField(forceResolver: true)
+    @auth
+  updateCreditNote(id: ID!, input: NewCreditNote!): CreditNote!
+    @goField(forceResolver: true)
+    @auth
+  deleteCreditNote(id: ID!): CreditNote! @goField(forceResolver: true) @auth
+  openCreditNote(id: ID!): CreditNote! @goField(forceResolver: true) @auth
+  voidCreditNote(id: ID!): CreditNote! @goField(forceResolver: true) @auth
+
+  createShipmentPreference(input: NewShipmentPreference!): ShipmentPreference!
+    @goField(forceResolver: true)
+    @auth
+  updateShipmentPreference(
+    id: ID!
+    input: NewShipmentPreference!
+  ): ShipmentPreference! @goField(forceResolver: true) @auth
+  deleteShipmentPreference(id: ID!): ShipmentPreference!
+    @goField(forceResolver: true)
+    @auth
+  toggleActiveShipmentPreference(
+    id: ID!
+    isActive: Boolean!
+  ): ShipmentPreference! @goField(forceResolver: true) @auth
+
+  createState(input: NewState!): State! @goField(forceResolver: true) @auth
+  updateState(id: ID!, input: NewState!): State!
+    @goField(forceResolver: true)
+    @auth
+  deleteState(id: ID!): State! @goField(forceResolver: true) @auth
+  toggleActiveState(id: ID!, isActive: Boolean!): State!
+    @goField(forceResolver: true)
+    @auth
+
+  createSupplier(input: NewSupplier!): Supplier!
+    @goField(forceResolver: true)
+    @auth
+  updateSupplier(id: ID!, input: NewSupplier!): Supplier!
+    @goField(forceResolver: true)
+    @auth
+  deleteSupplier(id: ID!): Supplier! @goField(forceResolver: true) @auth
+  toggleActiveSupplier(id: ID!, isActive: Boolean!): Supplier!
+    @goField(forceResolver: true)
+    @auth
+
+  createTax(input: NewTax!): Tax! @goField(forceResolver: true) @auth
+  updateTax(id: ID!, input: NewTax!): Tax! @goField(forceResolver: true) @auth
+  deleteTax(id: ID!): Tax! @goField(forceResolver: true) @auth
+  toggleActiveTax(id: ID!, isActive: Boolean!): Tax!
+    @goField(forceResolver: true)
+    @auth
+
+  createTaxGroup(input: NewTaxGroup!): TaxGroup!
+    @goField(forceResolver: true)
+    @auth
+  updateTaxGroup(id: ID!, input: NewTaxGroup!): TaxGroup!
+    @goField(forceResolver: true)
+    @auth
+  deleteTaxGroup(id: ID!): TaxGroup! @goField(forceResolver: true) @auth
+  toggleActiveTaxGroup(id: ID!, isActive: Boolean!): TaxGroup!
+    @goField(forceResolver: true)
+    @auth
+
+  createTownship(input: NewTownship!): Township!
+    @goField(forceResolver: true)
+    @auth
+  updateTownship(id: ID!, input: NewTownship!): Township!
+    @goField(forceResolver: true)
+    @auth
+  deleteTownship(id: ID!): Township! @goField(forceResolver: true) @auth
+  toggleActiveTownship(id: ID!, isActive: Boolean!): Township!
+    @goField(forceResolver: true)
+    @auth
+
+  createTransactionNumberSeries(
+    input: NewTransactionNumberSeries!
+  ): TransactionNumberSeries! @goField(forceResolver: true) @auth
+  updateTransactionNumberSeries(
+    id: ID!
+    input: NewTransactionNumberSeries!
+  ): TransactionNumberSeries! @goField(forceResolver: true) @auth
+  deleteTransactionNumberSeries(id: ID!): TransactionNumberSeries!
+    @goField(forceResolver: true)
+    @auth
+
+  createWarehouse(input: NewWarehouse!): Warehouse!
+    @goField(forceResolver: true)
+    @auth
+  updateWarehouse(id: ID!, input: NewWarehouse!): Warehouse!
+    @goField(forceResolver: true)
+    @auth
+  deleteWarehouse(id: ID!): Warehouse! @goField(forceResolver: true) @auth
+  toggleActiveWarehouse(id: ID!, isActive: Boolean!): Warehouse!
+    @goField(forceResolver: true)
+    @auth
+
+  uploadSingleImage(file: Upload!): UploadResponse!
+    @goField(forceResolver: true)
+    @auth
+
+  uploadMultipleImage(files: [Upload!]!): [UploadResponse]
+    @goField(forceResolver: true)
+    @auth
+
+  removeSingleImage(imageUrl: String!): UploadResponse!
+    @goField(forceResolver: true)
+    @auth
+
+  uploadFile(file: Upload!): UploadResponse! @goField(forceResolver: true) @auth
+  removeFile(fullUrl: String!): UploadResponse!
+    @goField(forceResolver: true)
+    @auth
+  createAttachment(
+    file: Upload!
+    referenceType: String!
+    referenceId: Int!
+  ): Document! @goField(forceResolver: true) @auth
+  deleteAttachment(documentId: Int!): Document!
+    @goField(forceResolver: true)
+    @auth
+
+  createPurchaseOrder(input: NewPurchaseOrder!): PurchaseOrder!
+    @goField(forceResolver: true)
+    @auth
+  updatePurchaseOrder(id: ID!, input: NewPurchaseOrder!): PurchaseOrder!
+    @goField(forceResolver: true)
+    @auth
+  deletePurchaseOrder(id: ID!): PurchaseOrder!
+    @goField(forceResolver: true)
+    @auth
+  confirmPurchaseOrder(id: ID!): PurchaseOrder!
+    @goField(forceResolver: true)
+    @auth
+  cancelPurchaseOrder(id: ID!): PurchaseOrder!
+    @goField(forceResolver: true)
+    @auth
+
+  createBill(input: NewBill!): Bill! @goField(forceResolver: true) @auth
+  updateBill(id: ID!, input: NewBill!): Bill!
+    @goField(forceResolver: true)
+    @auth
+  deleteBill(id: ID!): Bill! @goField(forceResolver: true) @auth
+  confirmBill(id: ID!): Bill! @goField(forceResolver: true) @auth
+  voidBill(id: ID!): Bill! @goField(forceResolver: true) @auth
+
+  createSupplierPayment(input: NewSupplierPayment!): SupplierPayment!
+    @goField(forceResolver: true)
+    @auth
+  updateSupplierPayment(id: ID!, input: NewSupplierPayment!): SupplierPayment!
+    @goField(forceResolver: true)
+    @auth
+  deleteSupplierPayment(id: ID!): SupplierPayment!
+    @goField(forceResolver: true)
+    @auth
+
+  createRecurringBill(input: NewRecurringBill!): RecurringBill!
+    @goField(forceResolver: true)
+    @auth
+  updateRecurringBill(id: ID!, input: NewRecurringBill!): RecurringBill!
+    @goField(forceResolver: true)
+    @auth
+  deleteRecurringBill(id: ID!): RecurringBill!
+    @goField(forceResolver: true)
+    @auth
+
+  createSupplierCredit(input: NewSupplierCredit!): SupplierCredit!
+    @goField(forceResolver: true)
+    @auth
+  updateSupplierCredit(id: ID!, input: NewSupplierCredit!): SupplierCredit!
+    @goField(forceResolver: true)
+    @auth
+  deleteSupplierCredit(id: ID!): SupplierCredit!
+    @goField(forceResolver: true)
+    @auth
+  confirmSupplierCredit(id: ID!): SupplierCredit!
+    @goField(forceResolver: true)
+    @auth
+  voidSupplierCredit(id: ID!): SupplierCredit!
+    @goField(forceResolver: true)
+    @auth
+
+  createTransferOrder(input: NewTransferOrder!): TransferOrder!
+    @goField(forceResolver: true)
+    @auth
+  # updateTransferOrder(id: ID!, input: NewTransferOrder!): TransferOrder!
+  #  @goField(forceResolver: true)
+  #  @auth
+  # deleteTransferOrder(id: ID!): TransferOrder!
+  #  @goField(forceResolver: true)
+  #  @auth
+
+  createInventoryAdjustment(
+    input: NewInventoryAdjustment!
+  ): InventoryAdjustment! @goField(forceResolver: true) @auth
+  # updateInventoryAdjustment(
+  #  id: ID!
+  #  input: NewInventoryAdjustment!
+  # ): InventoryAdjustment! @goField(forceResolver: true) @auth
+  deleteInventoryAdjustment(id: ID!): InventoryAdjustment!
+    @goField(forceResolver: true)
+    @auth
+  # ConvertAdjusted(id: ID!): InventoryAdjustment!
+  #  @goField(forceResolver: true)
+  #  @auth
+
+  createBankingTransaction(input: NewBankingTransaction!): BankingTransaction!
+    @goField(forceResolver: true)
+    @auth
+  updateBankingTransaction(
+    id: ID!
+    input: NewBankingTransaction!
+  ): BankingTransaction! @goField(forceResolver: true) @auth
+  deleteBankingTransaction(id: ID!): BankingTransaction!
+    @goField(forceResolver: true)
+    @auth
+
+  # createSupplierApplyToBill(
+  #   input: NewSupplierCreditApplyToBill!
+  # ): [SupplierCreditBill]! @goField(forceResolver: true) @auth
+
+  createSupplierApplyCredit(
+    input: NewBillApplyToSupplierCredit!
+  ): [SupplierCreditBill]! @goField(forceResolver: true) @auth
+
+  deleteSupplierCreditBill(id: ID!): SupplierCreditBill!
+    @goField(forceResolver: true)
+    @auth
+
+  # createCustomerApplyToInvoice(
+  #   input: NewCustomerCreditApplyToInvoice!
+  # ): [CustomerCreditInvoice]! @goField(forceResolver: true) @auth
+
+  createCustomerApplyCredit(
+    input: NewInvoiceApplyToCustomerCredit!
+  ): [CustomerCreditInvoice]! @goField(forceResolver: true) @auth
+
+  deleteCustomerCreditInvoice(id: ID!): CustomerCreditInvoice!
+    @goField(forceResolver: true)
+    @auth
+
+  createRefund(input: NewRefund!): Refund! @goField(forceResolver: true) @auth
+  updateRefund(id: ID!, input: NewRefund!): Refund!
+    @goField(forceResolver: true)
+    @auth
+  deleteRefund(id: ID!): Refund! @goField(forceResolver: true) @auth
+
+  # POS
+  createPosInvoicePayment(input: NewPosCheckout!): String!
+    @goField(forceResolver: true)
+    @auth
+}

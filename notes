@@ -1,0 +1,532 @@
+https://github.com/tsliwowicz/go-wrk
+
+Redis (with no expiration)
+- Account
+- MoneyAccount
+- Branch
+- Business
+- Currency
+- State
+- Tax
+- TaxGroup
+- Township
+- TransactionNumberSeries
+- Warehouse
+
+Redis (with expiration)
+- ProductCategory
+- ProductUnit
+- Product
+- ProductModifier
+
+Redis List (with no expiration)
+- Account 'AccountList:businessId'
+- MoneyAccount
+- Branch
+- Currency
+- State
+- Tax
+- TaxGroup
+- Township
+- Warehouse
+- DeliveryMethod
+- PaymentMode
+- ShipmentPreference
+- SalesPerson
+
+
+AccountingStock
+id, description (Opening Stock/From PO), poId (nullable), productId, 
+productType (single/variant/composite), receivedDate, batchNo, currentQty, 
+baseUnitValue, foreignUnitValue, exchangeRate
+
+Invoice -> InvoiceAccStock <- AccountingStock
+invoiceId, accStockId, qty
+
+
+Add new Accounting Stock -> No CoGS Recalculation
+Add (before date)/Update/Delete Accounting Stock -> Recalcuate CoGS 
+Add new invoice -> calculate CoGS
+Add (before date)/Update/Delete Invoice -> Recalculate CoGS
+
+Manual Journal Search Criteria
+journalNo
+date range
+accountid
+refNo
+status (draft/published)
+notes
+branch
+
+StockSummaryDailyBalance
+businessId
+productId
+productType
+branchId
+warehouseId
+transactionDateTime
+stockIn
+stockOut
+balance
+runningBalance
+
+use pitibooksdb;
+drop table if exists account_currency_daily_balances;
+drop table if exists account_journal_record_refs;
+drop table if exists account_journal_records;
+drop table if exists account_transactions;
+drop table if exists account_journals;
+drop table if exists banking_transaction_details;
+drop table if exists banking_transactions;
+drop table if exists journal_transactions;
+drop table if exists journals;
+drop table if exists expenses;
+drop table if exists stock_summaries;
+drop table if exists stock_summary_daily_balances;
+drop table if exists stocks;
+drop table if exists histories;
+drop table if exists images;
+drop table if exists documents;
+drop table if exists purchase_order_details;
+drop table if exists purchase_orders;
+drop table if exists bill_details;
+drop table if exists bills;
+drop table if exists supplier_paid_bills;
+drop table if exists supplier_payments;
+drop table if exists supplier_credit_details;
+drop table if exists supplier_credits;
+drop table if exists sales_order_details;
+drop table if exists sales_orders;
+drop table if exists sales_invoice_details;
+drop table if exists sales_invoices;
+drop table if exists paid_invoices;
+drop table if exists customer_payments;
+drop table if exists credit_note_details;
+drop table if exists credit_notes;
+drop table if exists supplier_credit_advances;
+drop table if exists customer_credit_advances;
+drop table if exists supplier_credit_bills;
+drop table if exists customer_credit_bills;
+
+drop table if exists suppliers;
+drop table if exists customers;
+
+drop table if exists productgroups_link_modifiers;
+drop table if exists products_link_modifiers;
+drop table if exists product_modifier_units;
+drop table if exists product_modifiers;
+drop table if exists products;
+drop table if exists product_units;
+
+Money In
+- Customer Advance
+- Expense Refund
+- Owner Contributions
+- Other Income
+- Supplier Credit Refund
+- Transfer From Another Account
+
+Money Out
+- Credit Note Refund
+- Owner Drawings
+- Supplier Advance
+- Transfer to Another Account
+
+
+Supplier Credits မှာ Inventory Asset (Credit), Cost Of Goods Sold (Debit) Journal ရိုက်ရန် (Inventory Valuation Process )
+Paginate မှာ CompositeCursor သုံးရန်
+
+
+
+Product မှာ 
+PurchasePrice
+InventoryQty ထည့်ရန်
+
+ProductCategory ကို Default ပေးရန်
+
+PurchaseOrder မှာ PartialReceived ရအောင်လုပ်ရန် .. 1 PO -> multiple bills
+
+Report မှာ Today, ThisWeek, ThisQuarter မရ
+
+
+INSERT INTO `pitibooksdb`.`accounts` (`id`, `business_id`, `detail_type`, `main_type`, `name`, `description`, `parent_account_id`, `is_active`, `is_system_default`, `system_default_code`, `currency_id`) VALUES ('44', '9af605ea-1669-402f-a00d-081020cf99b0', 'OtherCurrentAsset', 'Asset', 'Advance Payment', 'A current account that reports amounts paid in advance of receiving goods or services. When the goods or services are received, this account balance is decreased and an expense account is increased.', '0', '1', '1', '111', '1');
+
+
+// Calculate CostOfGoodsSold
+func ProcessInventoryValuation(tx *gorm.DB, stocks []*StockFragment, updatedReferenceId int, updatedReferenceType string) ([]int, error) {
+
+	accountIds := make([]int, 0)
+	var err error
+	var cnTransactionRecords []TransactionRecord
+	var transactionRecords []TransactionRecord
+
+	for _, stock := range stocks {
+		var existingStocks []models.Stock
+		err = tx.Where("warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ?", stock.WarehouseId, stock.ProductId, stock.ProductType, stock.BatchNumber).
+			Order("received_date").
+			Find(&existingStocks).Error
+		if err != nil {
+			return accountIds, err
+		}
+
+		productDetail, err := GetProductDetail(tx, stock.ProductId, stock.ProductType)
+		if err != nil {
+			return accountIds, err
+		}
+
+		stockDate := NormalizeDate(stock.ReceivedDate)
+		creditNoteIds := make([]int, 0)
+		cnStockBaseUnitValue := productDetail.PurchasePrice
+		for _, eStock := range existingStocks {
+			if eStock.ReferenceType == models.StockReferenceTypeCreditNote && stockDate.Equal(NormalizeDate(eStock.ReceivedDate)) {
+				creditNoteIds = append(creditNoteIds, eStock.ID)
+			}
+			if eStock.ReferenceType != models.StockReferenceTypeCreditNote && !stockDate.After(NormalizeDate(eStock.ReceivedDate)) {
+				cnStockBaseUnitValue = eStock.UnitValue
+			}
+		}
+
+		if len(creditNoteIds) > 0 {
+			for i, eStock := range existingStocks {
+				if slices.Contains(creditNoteIds, eStock.ID) {
+					existingStocks[i].UnitValue = cnStockBaseUnitValue
+				}
+			}
+
+			err = tx.Exec(`UPDATE stocks SET base_unit_value = ? WHERE id IN ?`,
+				cnStockBaseUnitValue, creditNoteIds).Error
+			if err != nil {
+				return accountIds, nil
+			}
+		}
+
+		var cnStockRecords []StockRecord
+		var cnStockDetails []StockDetail
+		err = tx.Table("credit_note_details").
+			Joins("INNER JOIN credit_notes ON credit_notes.id = credit_note_details.credit_note_id").
+			Select("credit_notes.id, credit_notes.credit_note_date AS date, credit_note_details.id AS detail_id, credit_note_details.detail_qty, credit_note_details.cogs").
+			Where("DATE(credit_notes.credit_note_date) = DATE(?) AND credit_notes.warehouse_id = ? AND credit_notes.current_status IN ? AND credit_note_details.product_id = ? AND credit_note_details.product_type = ? AND credit_note_details.batch_number = ?",
+				stock.ReceivedDate, stock.WarehouseId,
+				[]models.CreditNoteStatus{models.CreditNoteStatusConfirmed, models.CreditNoteStatusClosed},
+				stock.ProductId, stock.ProductType, stock.BatchNumber).
+			Find(&cnStockDetails).Error
+		if err != nil {
+			return accountIds, err
+		}
+
+		for _, stockDetail := range cnStockDetails {
+			cnStockRecords = append(cnStockRecords, StockRecord{
+				Id:        stockDetail.Id,
+				Type:      string(models.StockReferenceTypeCreditNote),
+				Date:      stockDetail.Date,
+				DetailId:  stockDetail.DetailId,
+				DetailQty: stockDetail.DetailQty,
+				OldCogs:   stockDetail.Cogs,
+				Cogs:      cnStockBaseUnitValue,
+			})
+		}
+
+		for _, stockRecord := range cnStockRecords {
+			found := false
+			for i, record := range cnTransactionRecords {
+				if record.Id == stockRecord.Id && record.Type == stockRecord.Type {
+					cnTransactionRecords[i].DetailStocks = append(cnTransactionRecords[i].DetailStocks, stockRecord)
+					cnTransactionRecords[i].TotalOldCogs = cnTransactionRecords[i].TotalOldCogs.Add(stockRecord.OldCogs)
+					cnTransactionRecords[i].TotalCogs = cnTransactionRecords[i].TotalCogs.Add(stockRecord.Cogs)
+					found = true
+					break
+				}
+			}
+			if !found {
+				cnTransactionRecords = append(cnTransactionRecords, TransactionRecord{
+					Id:                 stockRecord.Id,
+					Type:               stockRecord.Type,
+					DetailStocks:       []StockRecord{stockRecord},
+					TotalCogs:          stockRecord.Cogs,
+					TotalOldCogs:       stockRecord.OldCogs,
+					PurchaseAccountId:  productDetail.PurchaseAccountId,
+					InventoryAccountId: productDetail.InventoryAccountId,
+				})
+			}
+		}
+
+		var stockRecords []StockRecord
+		var stockDetails []StockDetail
+		err = tx.Table("sales_invoice_details").
+			Joins("INNER JOIN sales_invoices ON sales_invoices.id = sales_invoice_details.sales_invoice_id").
+			Select("sales_invoices.id, sales_invoices.invoice_date AS date, sales_invoice_details.id AS detail_id, sales_invoice_details.detail_qty, sales_invoice_details.cogs").
+			Where("sales_invoices.warehouse_id = ? AND sales_invoices.current_status IN ? AND sales_invoice_details.product_id = ? AND sales_invoice_details.product_type = ? AND sales_invoice_details.batch_number = ?",
+				stock.WarehouseId,
+				[]models.SalesInvoiceStatus{models.SalesInvoiceStatusConfirmed, models.SalesInvoiceStatusPaid, models.SalesInvoiceStatusPartialPaid},
+				stock.ProductId, stock.ProductType, stock.BatchNumber).
+			Find(&stockDetails).Error
+		if err != nil {
+			return accountIds, err
+		}
+
+		for _, stockDetail := range stockDetails {
+			stockRecords = append(stockRecords, StockRecord{
+				Id:        stockDetail.Id,
+				Type:      string(models.StockReferenceTypeInvoice),
+				Date:      stockDetail.Date,
+				DetailId:  stockDetail.DetailId,
+				DetailQty: stockDetail.DetailQty,
+				OldCogs:   stockDetail.Cogs,
+				Cogs:      decimal.Zero,
+			})
+		}
+		err = tx.Table("supplier_credit_details").
+			Joins("INNER JOIN supplier_credits ON supplier_credits.id = supplier_credit_details.supplier_credit_id").
+			Select("supplier_credits.id, supplier_credits.supplier_credit_date AS date, supplier_credit_details.id AS detail_id, supplier_credit_details.detail_qty, supplier_credit_details.cogs").
+			Where("supplier_credits.warehouse_id = ? AND supplier_credits.current_status IN ? AND supplier_credit_details.product_id = ? AND supplier_credit_details.product_type = ? AND supplier_credit_details.batch_number = ?",
+				stock.WarehouseId,
+				[]models.SupplierCreditStatus{models.SupplierCreditStatusConfirmed, models.SupplierCreditStatusClosed},
+				stock.ProductId, stock.ProductType, stock.BatchNumber).
+			Find(&stockDetails).Error
+		if err != nil {
+			return accountIds, err
+		}
+
+		for _, stockDetail := range stockDetails {
+			stockRecords = append(stockRecords, StockRecord{
+				Id:        stockDetail.Id,
+				Type:      string(models.StockReferenceTypeSupplierCredit),
+				Date:      stockDetail.Date,
+				DetailId:  stockDetail.DetailId,
+				DetailQty: stockDetail.DetailQty,
+				OldCogs:   stockDetail.Cogs,
+				Cogs:      decimal.Zero,
+			})
+		}
+
+		// Sort stock records by Date
+		sort.Slice(stockRecords, func(i, j int) bool {
+			return stockRecords[i].Date.Before(stockRecords[j].Date)
+		})
+
+		// Calculate COGS
+		var cogs decimal.Decimal
+		for index, stockRecord := range stockRecords {
+			processQty := stockRecord.DetailQty
+
+			if len(existingStocks) > 0 && !NormalizeDate(stockRecord.Date).Before(NormalizeDate(existingStocks[0].ReceivedDate)) {
+				for processQty.GreaterThan(decimal.Zero) && len(existingStocks) > 0 {
+					// Get the oldest stock
+					currentStock := existingStocks[0]
+
+					if currentStock.Qty.GreaterThanOrEqual(processQty) {
+						// If the current stock can fulfil the record
+						cogs = cogs.Add(processQty.Mul(currentStock.UnitValue))
+						currentStock.Qty = currentStock.Qty.Sub(processQty)
+						processQty = decimal.Zero
+					} else {
+						// If the current stock can only partially fulfil the record
+						cogs = cogs.Add(currentStock.Qty.Mul(currentStock.UnitValue))
+						processQty = processQty.Sub(currentStock.Qty)
+						currentStock.Qty = decimal.Zero
+					}
+
+					if currentStock.Qty.GreaterThan(decimal.Zero) {
+						existingStocks[0] = currentStock
+					} else {
+						if len(existingStocks) > 1 {
+							existingStocks = existingStocks[1:]
+						} else {
+							existingStocks = []models.Stock{}
+						}
+
+					}
+				}
+			}
+
+			if processQty.GreaterThan(decimal.Zero) {
+				cogs = cogs.Add(processQty.Mul(productDetail.PurchasePrice))
+			}
+
+			stockRecords[index].Cogs = cogs
+			cogs = decimal.Zero
+		}
+
+		for _, stockRecord := range stockRecords {
+			found := false
+			for i, record := range transactionRecords {
+				if record.Id == stockRecord.Id && record.Type == stockRecord.Type {
+					transactionRecords[i].DetailStocks = append(transactionRecords[i].DetailStocks, stockRecord)
+					transactionRecords[i].TotalOldCogs = transactionRecords[i].TotalOldCogs.Add(stockRecord.OldCogs)
+					transactionRecords[i].TotalCogs = transactionRecords[i].TotalCogs.Add(stockRecord.Cogs)
+					found = true
+					break
+				}
+			}
+			if !found {
+				transactionRecords = append(transactionRecords, TransactionRecord{
+					Id:                 stockRecord.Id,
+					Type:               stockRecord.Type,
+					DetailStocks:       []StockRecord{stockRecord},
+					TotalCogs:          stockRecord.Cogs,
+					TotalOldCogs:       stockRecord.OldCogs,
+					PurchaseAccountId:  productDetail.PurchaseAccountId,
+					InventoryAccountId: productDetail.InventoryAccountId,
+				})
+			}
+		}
+	}
+
+	for _, record := range transactionRecords {
+		if updatedReferenceId != 0 && record.Id == updatedReferenceId && record.Type == updatedReferenceType {
+			err = tx.Exec(`
+				UPDATE account_transactions INNER JOIN account_journals ON account_journals.id = account_transactions.journal_id
+				SET base_debit = ?
+				WHERE account_journals.reference_id = ?
+				AND account_journals.reference_type = ?
+				AND account_transactions.account_id = ?
+				AND account_transactions.is_inventory_valuation = true
+			`, record.TotalCogs, record.Id, record.Type, record.PurchaseAccountId).Error
+			if !slices.Contains(accountIds, record.PurchaseAccountId) {
+				accountIds = append(accountIds, record.PurchaseAccountId)
+			}
+			if err != nil {
+				return accountIds, err
+			}
+
+			err = tx.Exec(`
+				UPDATE account_transactions INNER JOIN account_journals ON account_journals.id = account_transactions.journal_id
+				SET base_credit = ?
+				WHERE account_journals.reference_id = ?
+				AND account_journals.reference_type = ?
+				AND account_transactions.account_id = ?
+				AND account_transactions.is_inventory_valuation = true
+			`, record.TotalCogs, record.Id, record.Type, record.InventoryAccountId).Error
+			if !slices.Contains(accountIds, record.InventoryAccountId) {
+				accountIds = append(accountIds, record.InventoryAccountId)
+			}
+			if err != nil {
+				return accountIds, err
+			}
+		} else if !record.TotalCogs.Equals(record.TotalOldCogs) {
+			err = tx.Exec(`
+				UPDATE account_transactions INNER JOIN account_journals ON account_journals.id = account_transactions.journal_id
+				SET base_debit = base_debit + ?
+				WHERE account_journals.reference_id = ?
+				AND account_journals.reference_type = ?
+				AND account_transactions.account_id = ?
+				AND account_transactions.is_inventory_valuation = true
+			`, record.TotalCogs.Sub(record.TotalOldCogs), record.Id, record.Type, record.PurchaseAccountId).Error
+			if !slices.Contains(accountIds, record.PurchaseAccountId) {
+				accountIds = append(accountIds, record.PurchaseAccountId)
+			}
+			if err != nil {
+				return accountIds, err
+			}
+
+			err = tx.Exec(`
+				UPDATE account_transactions INNER JOIN account_journals ON account_journals.id = account_transactions.journal_id
+				SET base_credit = base_credit + ?
+				WHERE account_journals.reference_id = ?
+				AND account_journals.reference_type = ?
+				AND account_transactions.account_id = ?
+				AND account_transactions.is_inventory_valuation = true
+			`, record.TotalCogs.Sub(record.TotalOldCogs), record.Id, record.Type, record.InventoryAccountId).Error
+			if !slices.Contains(accountIds, record.InventoryAccountId) {
+				accountIds = append(accountIds, record.InventoryAccountId)
+			}
+			if err != nil {
+				return accountIds, err
+			}
+		}
+
+		for _, detailStock := range record.DetailStocks {
+			if !detailStock.Cogs.Equals(detailStock.OldCogs) {
+				if detailStock.Type == string(models.StockReferenceTypeSupplierCredit) {
+					err = tx.Exec("UPDATE supplier_credit_details SET cogs = ? WHERE id = ?",
+						detailStock.Cogs, detailStock.DetailId).Error
+				}
+				if detailStock.Type == string(models.StockReferenceTypeInvoice) {
+					err = tx.Exec("UPDATE sales_invoice_details SET cogs = ? WHERE id = ?",
+						detailStock.Cogs, detailStock.DetailId).Error
+				}
+				if err != nil {
+					return accountIds, err
+				}
+			}
+		}
+	}
+
+	for _, record := range cnTransactionRecords {
+		if updatedReferenceId != 0 && record.Id == updatedReferenceId && record.Type == updatedReferenceType {
+			err = tx.Exec(`
+				UPDATE account_transactions INNER JOIN account_journals ON account_journals.id = account_transactions.journal_id
+				SET base_credit = ?
+				WHERE account_journals.reference_id = ?
+				AND account_journals.reference_type = ?
+				AND account_transactions.account_id = ?
+				AND account_transactions.is_inventory_valuation = true
+			`, record.TotalCogs, record.Id, record.Type, record.PurchaseAccountId).Error
+			if !slices.Contains(accountIds, record.PurchaseAccountId) {
+				accountIds = append(accountIds, record.PurchaseAccountId)
+			}
+			if err != nil {
+				return accountIds, err
+			}
+
+			err = tx.Exec(`
+				UPDATE account_transactions INNER JOIN account_journals ON account_journals.id = account_transactions.journal_id
+				SET base_debit = ?
+				WHERE account_journals.reference_id = ?
+				AND account_journals.reference_type = ?
+				AND account_transactions.account_id = ?
+				AND account_transactions.is_inventory_valuation = true
+			`, record.TotalCogs, record.Id, record.Type, record.InventoryAccountId).Error
+			if !slices.Contains(accountIds, record.InventoryAccountId) {
+				accountIds = append(accountIds, record.InventoryAccountId)
+			}
+			if err != nil {
+				return accountIds, err
+			}
+		} else if !record.TotalCogs.Equals(record.TotalOldCogs) {
+			err = tx.Exec(`
+				UPDATE account_transactions INNER JOIN account_journals ON account_journals.id = account_transactions.journal_id
+				SET base_credit = base_credit + ?
+				WHERE account_journals.reference_id = ?
+				AND account_journals.reference_type = ?
+				AND account_transactions.account_id = ?
+				AND account_transactions.is_inventory_valuation = true
+			`, record.TotalCogs.Sub(record.TotalOldCogs), record.Id, record.Type, record.PurchaseAccountId).Error
+			if !slices.Contains(accountIds, record.PurchaseAccountId) {
+				accountIds = append(accountIds, record.PurchaseAccountId)
+			}
+			if err != nil {
+				return accountIds, err
+			}
+
+			err = tx.Exec(`
+				UPDATE account_transactions INNER JOIN account_journals ON account_journals.id = account_transactions.journal_id
+				SET base_debit = base_debit + ?
+				WHERE account_journals.reference_id = ?
+				AND account_journals.reference_type = ?
+				AND account_transactions.account_id = ?
+				AND account_transactions.is_inventory_valuation = true
+			`, record.TotalCogs.Sub(record.TotalOldCogs), record.Id, record.Type, record.InventoryAccountId).Error
+			if !slices.Contains(accountIds, record.InventoryAccountId) {
+				accountIds = append(accountIds, record.InventoryAccountId)
+			}
+			if err != nil {
+				return accountIds, err
+			}
+		}
+
+		for _, detailStock := range record.DetailStocks {
+			if !detailStock.Cogs.Equals(detailStock.OldCogs) {
+				if detailStock.Type == string(models.StockReferenceTypeCreditNote) {
+					err = tx.Exec("UPDATE credit_note_details SET cogs = ? WHERE id = ?",
+						detailStock.Cogs, detailStock.DetailId).Error
+				}
+				if err != nil {
+					return accountIds, err
+				}
+			}
+		}
+	}
+
+	return accountIds, nil
+}

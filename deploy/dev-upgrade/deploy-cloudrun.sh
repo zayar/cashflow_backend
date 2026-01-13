@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Deploy backend to Cloud Run for dev-upgrade.
+#
+# Prereqs:
+# - gcloud auth login
+# - gcloud config set project cashflow-404ba
+# - enable APIs: run.googleapis.com, cloudbuild.googleapis.com, secretmanager.googleapis.com
+#
+# Required existing resources:
+# - Cloud SQL instance (MySQL) + database
+# - Memorystore (Redis) reachable from Cloud Run VPC connector (if using private IP)
+# - Secret Manager secret for DB_PASSWORD (recommended)
+
+PROJECT_ID="${PROJECT_ID:-cashflow-483906}"
+REGION="${REGION:-asia-southeast1}"
+SERVICE_NAME="${SERVICE_NAME:-cashflow-backend-dev-upgrade}"
+
+# Cloud SQL connection name: PROJECT:REGION:INSTANCE
+# Default instance name for this environment (override if needed).
+CLOUDSQL_INSTANCE="${CLOUDSQL_INSTANCE:-cashflow-mysql-dev-upgrade}"
+
+# Allow overriding the full connection name, otherwise derive it from PROJECT_ID/REGION/INSTANCE.
+CLOUDSQL_CONNECTION_NAME="${CLOUDSQL_CONNECTION_NAME:-${PROJECT_ID}:${REGION}:${CLOUDSQL_INSTANCE}}"
+
+if [[ -z "$CLOUDSQL_CONNECTION_NAME" ]]; then
+  echo "Missing CLOUDSQL_CONNECTION_NAME (format PROJECT:REGION:INSTANCE)."
+  echo "Example: ${PROJECT_ID}:${REGION}:${CLOUDSQL_INSTANCE}"
+  exit 1
+fi
+
+# Optional VPC connector name if you need private Redis/SQL.
+VPC_CONNECTOR="${VPC_CONNECTOR:-}"
+
+# Pub/Sub vars
+PUBSUB_TOPIC="${PUBSUB_TOPIC:-CashflowAccountingDevUpgrade}"
+PUBSUB_SUBSCRIPTION="${PUBSUB_SUBSCRIPTION:-CashflowAccountingDevUpgradeSub}"
+
+# Database vars
+DB_USER="${DB_USER:-root}"
+DB_NAME_2="${DB_NAME_2:-pitibooks}"
+DB_PORT="${DB_PORT:-3306}"
+
+# Redis vars
+REDIS_ADDRESS="${REDIS_ADDRESS:-}"
+if [[ -z "$REDIS_ADDRESS" ]]; then
+  echo "Missing REDIS_ADDRESS (e.g. 10.0.0.5:6379)"
+  exit 1
+fi
+
+# If Redis is on a private IP range, Cloud Run needs a Serverless VPC Connector.
+if [[ "$REDIS_ADDRESS" =~ ^10\.|^192\.168\.|^172\.(1[6-9]|2[0-9]|3[0-1])\. ]]; then
+  if [[ -z "$VPC_CONNECTOR" ]]; then
+    echo "REDIS_ADDRESS looks private ($REDIS_ADDRESS) but VPC_CONNECTOR is not set."
+    echo "Create a Serverless VPC Connector in $REGION and export VPC_CONNECTOR=<name>."
+    exit 1
+  fi
+fi
+
+# Other
+TOKEN_HOUR_LIFESPAN="${TOKEN_HOUR_LIFESPAN:-24}"
+GO_ENV="${GO_ENV:-dev-upgrade}"
+
+echo "Deploying $SERVICE_NAME to Cloud Run ($PROJECT_ID / $REGION)"
+
+# Ensure we're deploying to the expected project.
+gcloud config set project "$PROJECT_ID" 1>/dev/null
+
+DEPLOY_ARGS=(
+  run deploy "$SERVICE_NAME"
+  --region "$REGION"
+  --source .
+  --no-allow-unauthenticated
+  --add-cloudsql-instances "$CLOUDSQL_CONNECTION_NAME"
+  --set-env-vars "API_PORT_2=8080"
+  --set-env-vars "DB_USER=$DB_USER"
+  --set-env-vars "DB_PORT=$DB_PORT"
+  --set-env-vars "DB_HOST=/cloudsql/$CLOUDSQL_CONNECTION_NAME"
+  --set-env-vars "DB_NAME_2=$DB_NAME_2"
+  --set-env-vars "REDIS_ADDRESS=$REDIS_ADDRESS"
+  --set-env-vars "TOKEN_HOUR_LIFESPAN=$TOKEN_HOUR_LIFESPAN"
+  --set-env-vars "GO_ENV=$GO_ENV"
+  --set-env-vars "PUBSUB_PROJECT_ID=$PROJECT_ID"
+  --set-env-vars "PUBSUB_TOPIC=$PUBSUB_TOPIC"
+  --set-env-vars "PUBSUB_SUBSCRIPTION=$PUBSUB_SUBSCRIPTION"
+)
+
+if [[ -n "$VPC_CONNECTOR" ]]; then
+  # IMPORTANT:
+  # Use private-ranges-only so Redis (10.x) goes through the VPC connector,
+  # but Cloud SQL connector + Google APIs are still reachable without requiring Cloud NAT.
+  DEPLOY_ARGS+=(--vpc-connector "$VPC_CONNECTOR" --vpc-egress private-ranges-only)
+fi
+
+# Recommended: use Secret Manager for DB password.
+# Create once:
+#   echo -n 'your-db-password' | gcloud secrets create db-password-dev-upgrade --data-file=-
+# or update:
+#   echo -n 'your-db-password' | gcloud secrets versions add db-password-dev-upgrade --data-file=-
+DEPLOY_ARGS+=(--set-secrets "DB_PASSWORD=db-password-dev-upgrade:latest")
+
+gcloud "${DEPLOY_ARGS[@]}"
+
+SERVICE_URL="$(gcloud run services describe "$SERVICE_NAME" --region "$REGION" --format='value(status.url)')"
+echo "Deployed: $SERVICE_URL"
+echo "Next: run ./deploy/dev-upgrade/setup-pubsub.sh (it will wire push delivery to $SERVICE_URL/pubsub)"
+

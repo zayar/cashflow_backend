@@ -1,0 +1,15 @@
+INSERT INTO states (`country`,`code`,`state_name_en`,`state_name_mm`,`postal_code`,`is_active`) VALUES ('Myanmar','MMR001','Kachin','ကချင်ပြည်နယ်',0,1);
+INSERT INTO states (`country`,`code`,`state_name_en`,`state_name_mm`,`postal_code`,`is_active`) VALUES ('Myanmar','MMR002','Kayah','ကယားပြည်နယ်',0,1);
+INSERT INTO states (`country`,`code`,`state_name_en`,`state_name_mm`,`postal_code`,`is_active`) VALUES ('Myanmar','MMR003','Kayin','ကရင်ပြည်နယ်',0,1);
+INSERT INTO states (`country`,`code`,`state_name_en`,`state_name_mm`,`postal_code`,`is_active`) VALUES ('Myanmar','MMR004','Chin','ချင်းပြည်နယ်',0,1);
+INSERT INTO states (`country`,`code`,`state_name_en`,`state_name_mm`,`postal_code`,`is_active`) VALUES ('Myanmar','MMR005','Sagaing','စစ်ကိုင်းတိုင်းဒေသကြီး',0,1);
+INSERT INTO states (`country`,`code`,`state_name_en`,`state_name_mm`,`postal_code`,`is_active`) VALUES ('Myanmar','MMR006','Tanintharyi','တနင်္သာရီတိုင်းဒေသကြီး',0,1);
+INSERT INTO states (`country`,`code`,`state_name_en`,`state_name_mm`,`postal_code`,`is_active`) VALUES ('Myanmar','MMR009','Magway','မကွေးတိုင်းဒေသကြီး',0,1);
+INSERT INTO states (`country`,`code`,`state_name_en`,`state_name_mm`,`postal_code`,`is_active`) VALUES ('Myanmar','MMR010','Mandalay','မန္တလေးတိုင်းဒေသကြီး',0,1);
+INSERT INTO states (`country`,`code`,`state_name_en`,`state_name_mm`,`postal_code`,`is_active`) VALUES ('Myanmar','MMR011','Mon','မွန်ပြည်နယ်',0,1);
+INSERT INTO states (`country`,`code`,`state_name_en`,`state_name_mm`,`postal_code`,`is_active`) VALUES ('Myanmar','MMR012','Rakhine','ရခိုင်ပြည်နယ်',0,1);
+INSERT INTO states (`country`,`code`,`state_name_en`,`state_name_mm`,`postal_code`,`is_active`) VALUES ('Myanmar','MMR013','Yangon','ရန်ကုန်ဒေသကြီး',0,1);
+INSERT INTO states (`country`,`code`,`state_name_en`,`state_name_mm`,`postal_code`,`is_active`) VALUES ('Myanmar','MMR017','Ayeyarwady','ဧရာဝတီတိုင်းဒေသကြီး',0,1);
+INSERT INTO states (`country`,`code`,`state_name_en`,`state_name_mm`,`postal_code`,`is_active`) VALUES ('Myanmar','MMR018','Nay Pyi Taw','နေပြည်တော်',0,1);
+INSERT INTO states (`country`,`code`,`state_name_en`,`state_name_mm`,`postal_code`,`is_active`) VALUES ('Myanmar','MMR111','Bago','ပဲခူးတိုင်းဒေသကြီး',0,1);
+INSERT INTO states (`country`,`code`,`state_name_en`,`state_name_mm`,`postal_code`,`is_active`) VALUES ('Myanmar','MMR222','Shan','ရှမ်းပြည်နယ်',0,1);
