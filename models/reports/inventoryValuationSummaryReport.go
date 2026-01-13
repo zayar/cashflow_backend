@@ -22,7 +22,7 @@ type InventoryValuationSummaryResponse struct {
 
 func GetInventoryValuationSummaryReport(ctx context.Context, currentDate models.MyDateString, warehouseId int) ([]*InventoryValuationSummaryResponse, error) {
 	sqlT := `
-LastStockHistories AS (
+WITH LastStockHistories AS (
 
     SELECT
         product_id,
@@ -63,9 +63,9 @@ LastStockHistories AS (
 
     WHERE
         rn = 1
-        GROUP BY
-            product_id,
-            product_type
+    GROUP BY
+        product_id,
+        product_type
 ),
 AllProducts AS (
     SELECT
