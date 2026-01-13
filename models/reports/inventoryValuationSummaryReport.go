@@ -22,62 +22,33 @@ type InventoryValuationSummaryResponse struct {
 
 func GetInventoryValuationSummaryReport(ctx context.Context, currentDate models.MyDateString, warehouseId int) ([]*InventoryValuationSummaryResponse, error) {
 	sqlT := `
-WITH QtySummary AS (
-    SELECT
-        product_id,
-        product_type,
-        SUM(
-            received_qty
-            + adjusted_qty_in
-            + transfer_qty_in
-            - sale_qty
-            - ABS(adjusted_qty_out)
-            - ABS(transfer_qty_out)
-        ) AS stock_on_hand
-    FROM
-        stock_summary_daily_balances
-    WHERE
-        transaction_date <= @currentDate
-        AND business_id = @businessId
-        {{- if not .AllWarehouse }}
-            AND warehouse_id = @warehouseId
-        {{- end }}
-    GROUP BY
-        product_id,
-        product_type
-),
 LastStockHistories AS (
 
     SELECT
         product_id,
         product_type,
-    {{- if .AllWarehouse }}
+        -- Aggregate across warehouses + batches (when applicable) so summary matches inventory valuation by item.
         SUM(closing_qty) as closing_qty,
         SUM(closing_asset_value) as closing_asset_value
-    {{- else }}
-        closing_qty,
-        closing_asset_value
-    {{- end }}
     FROM
     (
         SELECT
             ROW_NUMBER() OVER (
                 PARTITION BY
-                {{- if .AllWarehouse }}
                     business_id,
                     warehouse_id,
-                {{- else }}
-                    business_id,
-                {{- end }}
-                product_id,
-                product_type -- batch_number
+                    product_id,
+                    product_type,
+                    batch_number
                 ORDER BY
+                    stock_date DESC,
                     cumulative_sequence DESC
             ) AS rn,
             business_id,
             warehouse_id,
             product_id,
             product_type,
+            batch_number,
             closing_qty,
             closing_asset_value
         FROM
@@ -92,11 +63,9 @@ LastStockHistories AS (
 
     WHERE
         rn = 1
-    {{- if .AllWarehouse }}
         GROUP BY
-        product_id,
-        product_type
-    {{- end }}
+            product_id,
+            product_type
 ),
 AllProducts AS (
     SELECT
@@ -122,20 +91,21 @@ AllProducts AS (
         business_id = @businessId
 )
 SELECT
-    q.product_id,
-    q.product_type,
-    q.stock_on_hand as stock_on_hand,
+    p.product_id,
+    p.product_type,
+    COALESCE(h.closing_qty, 0) as stock_on_hand,
     COALESCE(h.closing_asset_value, 0) as asset_value,
     p.product_name,
     p.product_unit_id,
     p.sku
 FROM
     AllProducts p
-    INNER JOIN QtySummary q on p.product_id = q.product_id
-    AND p.product_type = q.product_type
     LEFT JOIN LastStockHistories h on p.product_id = h.product_id
-    AND p.product_type = h.product_type
-    ORDER BY p.product_name;
+        AND p.product_type = h.product_type
+WHERE
+    COALESCE(h.closing_qty, 0) != 0
+    OR COALESCE(h.closing_asset_value, 0) != 0
+ORDER BY p.product_name;
 `
 
 	// 	sqlOneWarehouse := `
