@@ -298,33 +298,44 @@ func CreateCreditNote(tx *gorm.DB, logger *logrus.Logger, recordId int, recordTy
 		detailAccounts[detailAccountId] = amount
 
 		if creditNoteDetail.ProductId > 0 {
+			// Non-tracked items (no inventory account) should still generate a journal entry,
+			// but must NOT generate stock histories / inventory valuation lines.
+			// Otherwise we risk creating AccountTransactions with account_id=0 and failing journal creation.
+			if !CheckIfStockNeedsInventoryTracking(tx, creditNoteDetail.ProductId, creditNoteDetail.ProductType) {
+				continue
+			}
+
 			productDetail, err := GetProductDetail(tx, creditNoteDetail.ProductId, creditNoteDetail.ProductType)
 			if err != nil {
 				config.LogError(logger, "CreditNoteWorkflow.go", "CreateCreditNote", "GetProductDetail", creditNoteDetail, err)
 				return 0, nil, 0, nil, err
 			}
 
-			productPurchaseAmount, ok := productPurchaseAccounts[productDetail.PurchaseAccountId]
-			if !ok {
-				productPurchaseAmount = decimal.NewFromInt(0)
+			// Only track valuation accounts when configured on the product.
+			if productDetail.PurchaseAccountId > 0 {
+				productPurchaseAmount, ok := productPurchaseAccounts[productDetail.PurchaseAccountId]
+				if !ok {
+					productPurchaseAmount = decimal.NewFromInt(0)
+				}
+				if creditNote.IsTaxInclusive != nil && *creditNote.IsTaxInclusive {
+					productPurchaseAmount = productPurchaseAmount.Add(creditNoteDetail.DetailTotalAmount.Add(creditNoteDetail.DetailDiscountAmount).Sub(creditNoteDetail.DetailTaxAmount))
+				} else {
+					productPurchaseAmount = productPurchaseAmount.Add(creditNoteDetail.DetailTotalAmount.Add(creditNoteDetail.DetailDiscountAmount))
+				}
+				productPurchaseAccounts[productDetail.PurchaseAccountId] = productPurchaseAmount
 			}
-			if creditNote.IsTaxInclusive != nil && *creditNote.IsTaxInclusive {
-				productPurchaseAmount = productPurchaseAmount.Add(creditNoteDetail.DetailTotalAmount.Add(creditNoteDetail.DetailDiscountAmount).Sub(creditNoteDetail.DetailTaxAmount))
-			} else {
-				productPurchaseAmount = productPurchaseAmount.Add(creditNoteDetail.DetailTotalAmount.Add(creditNoteDetail.DetailDiscountAmount))
+			if productDetail.InventoryAccountId > 0 {
+				productInventoryAmount, ok := productInventoryAccounts[productDetail.InventoryAccountId]
+				if !ok {
+					productInventoryAmount = decimal.NewFromInt(0)
+				}
+				if creditNote.IsTaxInclusive != nil && *creditNote.IsTaxInclusive {
+					productInventoryAmount = productInventoryAmount.Add(creditNoteDetail.DetailTotalAmount.Add(creditNoteDetail.DetailDiscountAmount).Sub(creditNoteDetail.DetailTaxAmount))
+				} else {
+					productInventoryAmount = productInventoryAmount.Add(creditNoteDetail.DetailTotalAmount.Add(creditNoteDetail.DetailDiscountAmount))
+				}
+				productInventoryAccounts[productDetail.InventoryAccountId] = productInventoryAmount
 			}
-			productPurchaseAccounts[productDetail.PurchaseAccountId] = productPurchaseAmount
-
-			productInventoryAmount, ok := productInventoryAccounts[productDetail.InventoryAccountId]
-			if !ok {
-				productInventoryAmount = decimal.NewFromInt(0)
-			}
-			if creditNote.IsTaxInclusive != nil && *creditNote.IsTaxInclusive {
-				productInventoryAmount = productInventoryAmount.Add(creditNoteDetail.DetailTotalAmount.Add(creditNoteDetail.DetailDiscountAmount).Sub(creditNoteDetail.DetailTaxAmount))
-			} else {
-				productInventoryAmount = productInventoryAmount.Add(creditNoteDetail.DetailTotalAmount.Add(creditNoteDetail.DetailDiscountAmount))
-			}
-			productInventoryAccounts[productDetail.InventoryAccountId] = productInventoryAmount
 
 			stockHistory := models.StockHistory{
 				BusinessId:        creditNote.BusinessId,
