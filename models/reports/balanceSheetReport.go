@@ -361,9 +361,8 @@ func GetBalanceSheetReport(ctx context.Context, toDate models.MyDateString, repo
                 accounts AS ac ON acb.account_id = ac.id
             WHERE
                 acb.business_id= ?
-                AND acb.branch_id= ?
+                AND (? = 0 OR acb.branch_id = ?)
 				AND acb.currency_id = ?
-                AND acb.transaction_date >= ?
                 AND acb.transaction_date <= ?
                 AND acb.account_id IN (
                     SELECT id FROM accounts WHERE main_type IN ('Asset','Liability','Equity')
@@ -402,7 +401,7 @@ func GetBalanceSheetReport(ctx context.Context, toDate models.MyDateString, repo
                 FROM account_currency_daily_balances
                 WHERE
                     business_id= ?
-                    AND branch_id= ?
+                    AND (? = 0 OR branch_id = ?)
 					AND currency_id = ?
                     AND transaction_date < ?
                     AND account_id IN (
@@ -424,7 +423,7 @@ func GetBalanceSheetReport(ctx context.Context, toDate models.MyDateString, repo
                 FROM account_currency_daily_balances
                 WHERE
                     business_id= ?
-                    AND branch_id= ?
+                    AND (? = 0 OR branch_id = ?)
 					AND currency_id = ?
                     AND transaction_date >= ?
                     AND transaction_date <= ?
@@ -555,9 +554,9 @@ func GetBalanceSheetReport(ctx context.Context, toDate models.MyDateString, repo
                 ELSE 10
             END;
 
-    `, businessId, branchID, business.BaseCurrencyId, fromDate, toDate,
-		businessId, branchID, business.BaseCurrencyId, fromDate,
-		businessId, branchID, business.BaseCurrencyId, fromDate, toDate).Rows()
+    `, businessId, *branchID, *branchID, business.BaseCurrencyId, toDate,
+		businessId, *branchID, *branchID, business.BaseCurrencyId, fromDate,
+		businessId, *branchID, *branchID, business.BaseCurrencyId, fromDate, toDate).Rows()
 
 	if err != nil {
 		return nil, err
@@ -599,7 +598,7 @@ func GetBalanceSheetReport(ctx context.Context, toDate models.MyDateString, repo
 			balance.ParentAccountName = parentAccountName.String
 		}
 
-		balances = append(balances, *&balance)
+		balances = append(balances, balance)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
