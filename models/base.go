@@ -355,20 +355,20 @@ func ValidateValueAdjustment(ctx context.Context, businessId string, transaction
 		// Convert to local time
 		localTime := adjustmentDate.In(location)
 
-		// productName := ""
-		// if productType == ProductTypeSingle {
-		// 	product, err := GetProduct(ctx, productId)
-		// 	if err == nil {
-		// 		productName = product.Name
-		// 	}
-		// } else if productType == ProductTypeVariant {
-		// 	product, err := GetProductVariant(ctx, productId)
-		// 	if err == nil {
-		// 		productName = product.Name
-		// 	}
-		// }
+		productName := fmt.Sprintf("productId=%d", productId)
+		if productType == ProductTypeSingle {
+			product, err := GetProduct(ctx, productId)
+			if err == nil && product.Name != "" {
+				productName = product.Name
+			}
+		} else if productType == ProductTypeVariant {
+			product, err := GetProductVariant(ctx, productId)
+			if err == nil && product.Name != "" {
+				productName = product.Name
+			}
+		}
 
-		return errors.New("not allowed. Value adjustment was done for %s on " + localTime.Format("2006-01-02"))
+		return fmt.Errorf("not allowed. Value adjustment was done for %s on %s", productName, localTime.Format("2006-01-02"))
 	}
 
 	return nil
