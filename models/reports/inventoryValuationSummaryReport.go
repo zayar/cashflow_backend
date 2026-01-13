@@ -20,30 +20,23 @@ type InventoryValuationSummaryResponse struct {
 	AssetValue    decimal.Decimal `json:"assetValue"`
 }
 
-// SQL for ALL warehouses (no warehouse filter)
+// SQL for ALL warehouses - uses closing_qty and closing_asset_value columns
+// which are pre-calculated running totals in stock_histories table.
+// This matches the approach used in Inventory Valuation By Item report.
 const sqlAllWarehouses = `
 WITH LastStockHistories AS (
     SELECT
         product_id,
         product_type,
-        SUM(stock_on_hand) AS closing_qty,
-        SUM(asset_value) AS closing_asset_value
+        SUM(closing_qty) AS closing_qty,
+        SUM(closing_asset_value) AS closing_asset_value
     FROM (
         SELECT
-            warehouse_id,
             product_id,
             product_type,
-            batch_number,
-            SUM(qty) OVER (
-                PARTITION BY business_id, warehouse_id, product_id, product_type, batch_number
-                ORDER BY stock_date, cumulative_sequence
-                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-            ) AS stock_on_hand,
-            SUM(qty * base_unit_value) OVER (
-                PARTITION BY business_id, warehouse_id, product_id, product_type, batch_number
-                ORDER BY stock_date, cumulative_sequence
-                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-            ) AS asset_value,
+            warehouse_id,
+            closing_qty,
+            closing_asset_value,
             ROW_NUMBER() OVER (
                 PARTITION BY business_id, warehouse_id, product_id, product_type, batch_number
                 ORDER BY stock_date DESC, cumulative_sequence DESC
@@ -92,30 +85,20 @@ WHERE
 ORDER BY p.product_name;
 `
 
-// SQL for SPECIFIC warehouse (with warehouse filter)
+// SQL for SPECIFIC warehouse - uses closing_qty and closing_asset_value columns
 const sqlOneWarehouse = `
 WITH LastStockHistories AS (
     SELECT
         product_id,
         product_type,
-        SUM(stock_on_hand) AS closing_qty,
-        SUM(asset_value) AS closing_asset_value
+        SUM(closing_qty) AS closing_qty,
+        SUM(closing_asset_value) AS closing_asset_value
     FROM (
         SELECT
-            warehouse_id,
             product_id,
             product_type,
-            batch_number,
-            SUM(qty) OVER (
-                PARTITION BY business_id, warehouse_id, product_id, product_type, batch_number
-                ORDER BY stock_date, cumulative_sequence
-                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-            ) AS stock_on_hand,
-            SUM(qty * base_unit_value) OVER (
-                PARTITION BY business_id, warehouse_id, product_id, product_type, batch_number
-                ORDER BY stock_date, cumulative_sequence
-                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-            ) AS asset_value,
+            closing_qty,
+            closing_asset_value,
             ROW_NUMBER() OVER (
                 PARTITION BY business_id, warehouse_id, product_id, product_type, batch_number
                 ORDER BY stock_date DESC, cumulative_sequence DESC
@@ -182,7 +165,6 @@ func GetInventoryValuationSummaryReport(ctx context.Context, currentDate models.
 	db := config.GetDB()
 
 	// Use explicit separate queries - no templates, no conditional args
-	// This eliminates any GORM named-param expansion issues
 	if warehouseId == 0 {
 		// All Warehouses: only 2 named params
 		if err := db.WithContext(ctx).Raw(sqlAllWarehouses, map[string]interface{}{
