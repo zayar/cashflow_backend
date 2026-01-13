@@ -207,6 +207,53 @@ WITH Transactions AS (
 		dt.product_id = @productId
 			AND dt.product_type = @productType 
 	{{- end }}
+	{{- if .MultipleTransactionType }} UNION {{- end }}
+
+	{{- if .IA }}
+	SELECT
+		COALESCE(NULLIF(a.reference_number, ''), CONCAT('IA-', a.id)) transaction_number,
+		a.adjustment_date transaction_date,
+		a.id transaction_id,
+		CONCAT('inventory_adjustments_', LOWER(a.adjustment_type)) transaction_type,
+		a.current_status status,
+		0 customer_id,
+		0 supplier_id,
+		0 currency_id,
+		CASE WHEN a.adjustment_type = 'Quantity' THEN ad.adjusted_value ELSE 0 END qty,
+		CASE WHEN a.adjustment_type = 'Quantity' THEN ad.cost_price ELSE 0 END price,
+		CASE
+			WHEN a.adjustment_type = 'Quantity' THEN ad.adjusted_value * ad.cost_price
+			ELSE ad.adjusted_value
+		END AS total
+	FROM
+		inventory_adjustment_details ad
+			LEFT JOIN inventory_adjustments a ON a.id = ad.inventory_adjustment_id
+	WHERE
+		ad.product_id = @productId
+			AND ad.product_type = @productType
+	{{- end }}
+	{{- if .MultipleTransactionType }} UNION {{- end }}
+
+	{{- if .TO }}
+	SELECT
+		t.order_number transaction_number,
+		t.transfer_date transaction_date,
+		t.id transaction_id,
+		'transfer_orders' transaction_type,
+		t.current_status status,
+		0 customer_id,
+		0 supplier_id,
+		0 currency_id,
+		dt.transfer_qty qty,
+		0 price,
+		0 total
+	FROM
+		transfer_order_details dt
+			LEFT JOIN transfer_orders t ON t.id = dt.transfer_order_id
+	WHERE
+		dt.product_id = @productId
+			AND dt.product_type = @productType
+	{{- end }}
 )
 SELECT
 {{- if or .SO .SI .CN }}
@@ -216,7 +263,7 @@ SELECT
 	suppliers.name AS supplier_name,
 {{- end }}
 	Transactions.*,
-	currencies.symbol currency_symbol,
+	COALESCE(currencies.symbol, '') currency_symbol,
 	currencies.decimal_places
 FROM Transactions
 {{- if or .SO .SI .CN }}
@@ -236,6 +283,8 @@ ORDER BY Transactions.transaction_date
 		"BL":                      transactionType == nil || *transactionType == "BL",
 		"CN":                      transactionType == nil || *transactionType == "CN",
 		"SC":                      transactionType == nil || *transactionType == "SC",
+		"IA":                      transactionType == nil || *transactionType == "IA",
+		"TO":                      transactionType == nil || *transactionType == "TO",
 		"MultipleTransactionType": transactionType == nil,
 	})
 	if err != nil {
