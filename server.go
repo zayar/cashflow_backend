@@ -105,11 +105,9 @@ func accountingPubSubHandler() gin.HandlerFunc {
 		var msg PubSubMessage
 		logger := config.GetLogger()
 
-		// If Redis isn't ready, Pub/Sub should retry.
-		if config.GetRedisLock() == nil {
-			c.Status(http.StatusServiceUnavailable)
-			return
-		}
+		// Redis lock is a best-effort optimization.
+		// Reliability must not depend on Redis: we also serialize posting via MySQL advisory locks in ProcessMessage().
+		redisLock := config.GetRedisLock()
 
 		body, err := io.ReadAll(c.Request.Body)
 		if err != nil {
@@ -148,20 +146,43 @@ func accountingPubSubHandler() gin.HandlerFunc {
 			correlationID = msg.Message.ID
 		}
 
-		// Try to obtain a lock for the businessID
-		lock, err := config.GetRedisLock().Obtain(c.Request.Context(), fmt.Sprintf("lock:%s", m.BusinessId), 30*time.Second, nil)
-		if err == redislock.ErrNotObtained {
-			config.LogError(logger, "server.go", "accountingPubSubHandler", "Could not obtain lock for businessID", m.BusinessId, err)
-			// Retry later.
-			c.Status(http.StatusConflict)
-			return
-		} else if err != nil {
-			config.LogError(logger, "server.go", "accountingPubSubHandler", "Error obtaining lock for businessID", m.BusinessId, err)
-			// Retry on transient lock/redis errors.
-			c.Status(http.StatusInternalServerError)
-			return
+		// Best-effort: try to obtain a lock for the businessID to avoid long in-request blocking.
+		// If Redis is unavailable / lock cannot be obtained, continue anyway; ProcessMessage() will serialize safely.
+		var lock *redislock.Lock
+		if redisLock == nil {
+			logger.WithFields(logrus.Fields{
+				"field":          "accountingPubSubHandler",
+				"business_id":    m.BusinessId,
+				"reference_type": m.ReferenceType,
+				"reference_id":   m.ReferenceId,
+				"message_id":     msg.Message.ID,
+			}).Warn("redis lock not ready; proceeding without redis lock")
+		} else {
+			lock, err = redisLock.Obtain(c.Request.Context(), fmt.Sprintf("lock:%s", m.BusinessId), 30*time.Second, nil)
+			if err == redislock.ErrNotObtained {
+				logger.WithFields(logrus.Fields{
+					"field":          "accountingPubSubHandler",
+					"business_id":    m.BusinessId,
+					"reference_type": m.ReferenceType,
+					"reference_id":   m.ReferenceId,
+					"message_id":     msg.Message.ID,
+				}).Warn("could not obtain redis lock; proceeding without redis lock")
+				lock = nil
+			} else if err != nil {
+				logger.WithFields(logrus.Fields{
+					"field":          "accountingPubSubHandler",
+					"business_id":    m.BusinessId,
+					"reference_type": m.ReferenceType,
+					"reference_id":   m.ReferenceId,
+					"message_id":     msg.Message.ID,
+				}).Warn("error obtaining redis lock; proceeding without redis lock: " + err.Error())
+				lock = nil
+			}
 		}
 		defer func() {
+			if lock == nil {
+				return
+			}
 			if releaseErr := lock.Release(c.Request.Context()); releaseErr != nil {
 				logger.WithFields(logrus.Fields{
 					"field":        "accountingPubSubHandler",
