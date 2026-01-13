@@ -121,11 +121,21 @@ FROM
 
 	db := config.GetDB()
 	var summaries []*InventorySummaryResponse
-	if err := db.WithContext(ctx).Raw(sql, map[string]interface{}{
-		"warehouseId": warehouseId,
-		"businessId":  businessId,
-		"toDate":      toDate,
-	}).Scan(&summaries).Error; err != nil {
+	// IMPORTANT:
+	// The SQL template conditionally removes the warehouse filter when warehouseId is nil/0.
+	// GORM expands named params to positional placeholders per-occurrence. If we pass a named param
+	// that no longer exists in the final SQL (e.g. warehouseId), the driver can error with:
+	// "sql: expected N arguments, got N+1".
+	//
+	// Therefore, only include warehouseId when the placeholder is present.
+	args := map[string]interface{}{
+		"businessId": businessId,
+		"toDate":     toDate,
+	}
+	if warehouseId != nil && *warehouseId != 0 {
+		args["warehouseId"] = warehouseId
+	}
+	if err := db.WithContext(ctx).Raw(sql, args).Scan(&summaries).Error; err != nil {
 		return nil, err
 	}
 	// // calculating current_qty and available stock
