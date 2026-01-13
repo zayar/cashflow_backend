@@ -20,32 +20,19 @@ type InventoryValuationSummaryResponse struct {
 	AssetValue    decimal.Decimal `json:"assetValue"`
 }
 
-// SQL for ALL warehouses - uses closing_qty and closing_asset_value columns
-// which are pre-calculated running totals in stock_histories table.
-// This matches the approach used in Inventory Valuation By Item report.
+// SQL for ALL warehouses
+// Simply SUM all qty and qty*base_unit_value up to the report date.
+// This is the most reliable approach - doesn't depend on closing_qty being updated.
 const sqlAllWarehouses = `
-WITH LastStockHistories AS (
+WITH StockTotals AS (
     SELECT
         product_id,
         product_type,
-        SUM(closing_qty) AS closing_qty,
-        SUM(closing_asset_value) AS closing_asset_value
-    FROM (
-        SELECT
-            product_id,
-            product_type,
-            warehouse_id,
-            closing_qty,
-            closing_asset_value,
-            ROW_NUMBER() OVER (
-                PARTITION BY business_id, warehouse_id, product_id, product_type, batch_number
-                ORDER BY stock_date DESC, cumulative_sequence DESC
-            ) AS rn
-        FROM stock_histories
-        WHERE business_id = @businessId
-          AND stock_date <= @currentDate
-    ) AS stock_histories_ranked
-    WHERE rn = 1
+        SUM(qty) AS stock_on_hand,
+        SUM(qty * base_unit_value) AS asset_value
+    FROM stock_histories
+    WHERE business_id = @businessId
+      AND stock_date <= @currentDate
     GROUP BY product_id, product_type
 ),
 AllProducts AS (
@@ -70,45 +57,33 @@ AllProducts AS (
 SELECT
     p.product_id,
     p.product_type,
-    COALESCE(h.closing_qty, 0) as stock_on_hand,
-    COALESCE(h.closing_asset_value, 0) as asset_value,
+    COALESCE(s.stock_on_hand, 0) as stock_on_hand,
+    COALESCE(s.asset_value, 0) as asset_value,
     p.product_name,
     p.product_unit_id,
     p.sku
 FROM
     AllProducts p
-    LEFT JOIN LastStockHistories h on p.product_id = h.product_id
-        AND p.product_type = h.product_type
+    LEFT JOIN StockTotals s ON p.product_id = s.product_id
+        AND p.product_type = s.product_type
 WHERE
-    COALESCE(h.closing_qty, 0) != 0
-    OR COALESCE(h.closing_asset_value, 0) != 0
+    COALESCE(s.stock_on_hand, 0) != 0
+    OR COALESCE(s.asset_value, 0) != 0
 ORDER BY p.product_name;
 `
 
-// SQL for SPECIFIC warehouse - uses closing_qty and closing_asset_value columns
+// SQL for SPECIFIC warehouse
 const sqlOneWarehouse = `
-WITH LastStockHistories AS (
+WITH StockTotals AS (
     SELECT
         product_id,
         product_type,
-        SUM(closing_qty) AS closing_qty,
-        SUM(closing_asset_value) AS closing_asset_value
-    FROM (
-        SELECT
-            product_id,
-            product_type,
-            closing_qty,
-            closing_asset_value,
-            ROW_NUMBER() OVER (
-                PARTITION BY business_id, warehouse_id, product_id, product_type, batch_number
-                ORDER BY stock_date DESC, cumulative_sequence DESC
-            ) AS rn
-        FROM stock_histories
-        WHERE business_id = @businessId
-          AND stock_date <= @currentDate
-          AND warehouse_id = @warehouseId
-    ) AS stock_histories_ranked
-    WHERE rn = 1
+        SUM(qty) AS stock_on_hand,
+        SUM(qty * base_unit_value) AS asset_value
+    FROM stock_histories
+    WHERE business_id = @businessId
+      AND stock_date <= @currentDate
+      AND warehouse_id = @warehouseId
     GROUP BY product_id, product_type
 ),
 AllProducts AS (
@@ -133,18 +108,18 @@ AllProducts AS (
 SELECT
     p.product_id,
     p.product_type,
-    COALESCE(h.closing_qty, 0) as stock_on_hand,
-    COALESCE(h.closing_asset_value, 0) as asset_value,
+    COALESCE(s.stock_on_hand, 0) as stock_on_hand,
+    COALESCE(s.asset_value, 0) as asset_value,
     p.product_name,
     p.product_unit_id,
     p.sku
 FROM
     AllProducts p
-    LEFT JOIN LastStockHistories h on p.product_id = h.product_id
-        AND p.product_type = h.product_type
+    LEFT JOIN StockTotals s ON p.product_id = s.product_id
+        AND p.product_type = s.product_type
 WHERE
-    COALESCE(h.closing_qty, 0) != 0
-    OR COALESCE(h.closing_asset_value, 0) != 0
+    COALESCE(s.stock_on_hand, 0) != 0
+    OR COALESCE(s.asset_value, 0) != 0
 ORDER BY p.product_name;
 `
 
@@ -164,9 +139,7 @@ func GetInventoryValuationSummaryReport(ctx context.Context, currentDate models.
 	var results []*InventoryValuationSummaryResponse
 	db := config.GetDB()
 
-	// Use explicit separate queries - no templates, no conditional args
 	if warehouseId == 0 {
-		// All Warehouses: only 2 named params
 		if err := db.WithContext(ctx).Raw(sqlAllWarehouses, map[string]interface{}{
 			"businessId":  businessId,
 			"currentDate": currentDate,
@@ -174,7 +147,6 @@ func GetInventoryValuationSummaryReport(ctx context.Context, currentDate models.
 			return nil, err
 		}
 	} else {
-		// Specific Warehouse: 3 named params
 		if err := db.WithContext(ctx).Raw(sqlOneWarehouse, map[string]interface{}{
 			"businessId":  businessId,
 			"currentDate": currentDate,
