@@ -23,49 +23,45 @@ type InventoryValuationSummaryResponse struct {
 func GetInventoryValuationSummaryReport(ctx context.Context, currentDate models.MyDateString, warehouseId int) ([]*InventoryValuationSummaryResponse, error) {
 	sqlT := `
 WITH LastStockHistories AS (
-
+    -- IMPORTANT: do NOT rely on stock_histories.closing_qty / closing_asset_value.
+    -- Those can be stale when the async workflow that recalculates closing balances is delayed/missed.
+    -- Instead, compute "as-of" stock and asset value directly from immutable movement rows (qty, base_unit_value),
+    -- matching the logic used in Inventory Valuation By Item report.
     SELECT
         product_id,
         product_type,
-        -- Aggregate across warehouses + batches (when applicable) so summary matches inventory valuation by item.
-        SUM(closing_qty) as closing_qty,
-        SUM(closing_asset_value) as closing_asset_value
-    FROM
-    (
+        SUM(stock_on_hand) AS closing_qty,
+        SUM(asset_value) AS closing_asset_value
+    FROM (
         SELECT
-            ROW_NUMBER() OVER (
-                PARTITION BY
-                    business_id,
-                    warehouse_id,
-                    product_id,
-                    product_type,
-                    batch_number
-                ORDER BY
-                    stock_date DESC,
-                    cumulative_sequence DESC
-            ) AS rn,
-            business_id,
             warehouse_id,
             product_id,
             product_type,
             batch_number,
-            closing_qty,
-            closing_asset_value
-        FROM
-            stock_histories
-            where business_id = @businessId
-            AND stock_date <= @currentDate
-            {{- if not .AllWarehouse }}
-                AND warehouse_id = @warehouseId
-            {{- end }}
-    )
-    AS stock_histories_ranked
-
-    WHERE
-        rn = 1
-    GROUP BY
-        product_id,
-        product_type
+            -- Running balances from the start of time up to @currentDate
+            SUM(qty) OVER (
+                PARTITION BY business_id, warehouse_id, product_id, product_type, batch_number
+                ORDER BY stock_date, cumulative_sequence
+                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+            ) AS stock_on_hand,
+            SUM(qty * base_unit_value) OVER (
+                PARTITION BY business_id, warehouse_id, product_id, product_type, batch_number
+                ORDER BY stock_date, cumulative_sequence
+                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+            ) AS asset_value,
+            ROW_NUMBER() OVER (
+                PARTITION BY business_id, warehouse_id, product_id, product_type, batch_number
+                ORDER BY stock_date DESC, cumulative_sequence DESC
+            ) AS rn
+        FROM stock_histories
+        WHERE business_id = @businessId
+          AND stock_date <= @currentDate
+          {{- if not .AllWarehouse }}
+              AND warehouse_id = @warehouseId
+          {{- end }}
+    ) AS stock_histories_ranked
+    WHERE rn = 1
+    GROUP BY product_id, product_type
 ),
 AllProducts AS (
     SELECT
