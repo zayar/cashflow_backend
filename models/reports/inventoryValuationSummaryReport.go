@@ -36,6 +36,9 @@ WITH StockTotals AS (
     FROM stock_histories
     WHERE business_id = @businessId
       AND stock_date <= @currentDate
+      -- Only include active ledger rows (exclude reversals and rows that have been reversed).
+      AND is_reversal = 0
+      AND reversed_by_stock_history_id IS NULL
     GROUP BY product_id, product_type
 ),
 HasOpeningHist AS (
@@ -47,6 +50,8 @@ HasOpeningHist AS (
     FROM stock_histories
     WHERE business_id = @businessId
       AND stock_date <= @currentDate
+      AND is_reversal = 0
+      AND reversed_by_stock_history_id IS NULL
       AND reference_type IN ('POS', 'PGOS', 'PCOS')
     GROUP BY product_id, product_type
 ),
@@ -147,6 +152,9 @@ WITH StockTotals AS (
     WHERE business_id = @businessId
       AND stock_date <= @currentDate
       AND warehouse_id = @warehouseId
+      -- Only include active ledger rows (exclude reversals and rows that have been reversed).
+      AND is_reversal = 0
+      AND reversed_by_stock_history_id IS NULL
     GROUP BY product_id, product_type
 ),
 HasOpeningHist AS (
@@ -157,6 +165,8 @@ HasOpeningHist AS (
     WHERE business_id = @businessId
       AND stock_date <= @currentDate
       AND warehouse_id = @warehouseId
+      AND is_reversal = 0
+      AND reversed_by_stock_history_id IS NULL
       AND reference_type IN ('POS', 'PGOS', 'PCOS')
     GROUP BY product_id, product_type
 ),

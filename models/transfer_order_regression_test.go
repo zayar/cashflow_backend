@@ -684,6 +684,220 @@ func TestInventoryValuationByItem_DoesNotDoubleCountTransferReversals(t *testing
 	}
 }
 
+func TestInventoryValuationSummaryReport_IgnoresReversalRows(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("INTEGRATION_TESTS")) == "" {
+		t.Skip("set INTEGRATION_TESTS=1 to run integration tests (requires docker)")
+	}
+
+	ctx := context.Background()
+
+	redisName, redisPort := startRedisContainer(t)
+	t.Cleanup(func() { _ = dockerRmForce(redisName) })
+
+	mysqlName, mysqlPort := startMySQLContainer(t)
+	t.Cleanup(func() { _ = dockerRmForce(mysqlName) })
+
+	t.Setenv("REDIS_ADDRESS", fmt.Sprintf("127.0.0.1:%s", redisPort))
+	t.Setenv("DB_USER", "root")
+	t.Setenv("DB_PASSWORD", "testpw")
+	t.Setenv("DB_HOST", "127.0.0.1")
+	t.Setenv("DB_PORT", mysqlPort)
+	t.Setenv("DB_NAME_2", "pitibooks_test")
+	t.Setenv("STOCK_COMMANDS_DOCS", "")
+
+	config.ConnectDatabaseWithRetry()
+	config.ConnectRedisWithRetry()
+	models.MigrateTable()
+
+	ctx = utils.SetUserIdInContext(ctx, 1)
+	ctx = utils.SetUserNameInContext(ctx, "Test")
+	ctx = utils.SetUsernameInContext(ctx, "test@local")
+
+	biz, err := models.CreateBusiness(ctx, &models.NewBusiness{
+		Name:  "Test Biz",
+		Email: "owner@test.local",
+	})
+	if err != nil {
+		t.Fatalf("CreateBusiness: %v", err)
+	}
+	businessID := biz.ID.String()
+	ctx = utils.SetBusinessIdInContext(ctx, businessID)
+
+	db := config.GetDB()
+	var primary models.Warehouse
+	if err := db.WithContext(ctx).Where("business_id = ? AND name = ?", businessID, "Primary Warehouse").First(&primary).Error; err != nil {
+		t.Fatalf("fetch primary warehouse: %v", err)
+	}
+
+	unit, err := models.CreateProductUnit(ctx, &models.NewProductUnit{Name: "Pcs", Abbreviation: "pc", Precision: models.PrecisionZero})
+	if err != nil {
+		t.Fatalf("CreateProductUnit: %v", err)
+	}
+	sysAccounts, err := models.GetSystemAccounts(businessID)
+	if err != nil {
+		t.Fatalf("GetSystemAccounts: %v", err)
+	}
+	invAcc := sysAccounts[models.AccountCodeInventoryAsset]
+	salesAcc := sysAccounts[models.AccountCodeSales]
+	purchaseAcc := sysAccounts[models.AccountCodeCostOfGoodsSold]
+
+	banana, err := models.CreateProduct(ctx, &models.NewProduct{
+		Name:               "banana",
+		Sku:                "BAN-001",
+		Barcode:            "BAN-001",
+		UnitId:             unit.ID,
+		SalesAccountId:     salesAcc,
+		PurchaseAccountId:  purchaseAcc,
+		InventoryAccountId: invAcc,
+		IsBatchTracking:    utils.NewFalse(),
+	})
+	if err != nil {
+		t.Fatalf("CreateProduct: %v", err)
+	}
+
+	business, err := models.GetBusiness(ctx)
+	if err != nil {
+		t.Fatalf("GetBusiness: %v", err)
+	}
+	// Use date-only conversion (same as workflows).
+	d0 := time.Date(2025, 12, 31, 12, 0, 0, 0, time.UTC)
+	stockDate, err := utils.ConvertToDate(d0, business.Timezone)
+	if err != nil {
+		t.Fatalf("ConvertToDate: %v", err)
+	}
+
+	// Seed opening + an outgoing row that gets reversed+replaced (to mimic repricing behavior).
+	tx := db.Begin()
+
+	opening := &models.StockHistory{
+		BusinessId:     businessID,
+		WarehouseId:    primary.ID,
+		ProductId:      banana.ID,
+		ProductType:    models.ProductTypeSingle,
+		BatchNumber:    "",
+		StockDate:      stockDate,
+		Qty:            decimal.NewFromInt(20),
+		BaseUnitValue:  decimal.NewFromInt(50),
+		Description:    "Opening Stock",
+		ReferenceType:  models.StockReferenceTypeProductOpeningStock,
+		ReferenceID:    banana.ID,
+		IsOutgoing:     utils.NewFalse(),
+		IsTransferIn:   utils.NewFalse(),
+		IsReversal:     false,
+	}
+	if err := tx.WithContext(ctx).Create(opening).Error; err != nil {
+		tx.Rollback()
+		t.Fatalf("create opening: %v", err)
+	}
+
+	origOut := &models.StockHistory{
+		BusinessId:     businessID,
+		WarehouseId:    primary.ID,
+		ProductId:      banana.ID,
+		ProductType:    models.ProductTypeSingle,
+		BatchNumber:    "",
+		StockDate:      stockDate.AddDate(0, 0, 14), // 14 Jan 2026 (date-only semantics)
+		Qty:            decimal.NewFromInt(-2),
+		BaseUnitValue:  decimal.NewFromInt(50),
+		Description:    "Invoice",
+		ReferenceType:  models.StockReferenceTypeInvoice,
+		ReferenceID:    12,
+		ReferenceDetailID: 12,
+		IsOutgoing:     utils.NewTrue(),
+		IsTransferIn:   utils.NewFalse(),
+		IsReversal:     false,
+	}
+	if err := tx.WithContext(ctx).Create(origOut).Error; err != nil {
+		tx.Rollback()
+		t.Fatalf("create orig out: %v", err)
+	}
+
+	// Append reversal and mark original reversed.
+	rev := &models.StockHistory{
+		BusinessId:             origOut.BusinessId,
+		WarehouseId:            origOut.WarehouseId,
+		ProductId:              origOut.ProductId,
+		ProductType:            origOut.ProductType,
+		BatchNumber:            origOut.BatchNumber,
+		StockDate:              origOut.StockDate,
+		Qty:                    origOut.Qty.Neg(),
+		BaseUnitValue:          origOut.BaseUnitValue,
+		Description:            "REV: " + origOut.Description,
+		ReferenceType:          origOut.ReferenceType,
+		ReferenceID:            origOut.ReferenceID,
+		ReferenceDetailID:      origOut.ReferenceDetailID,
+		IsOutgoing:             utils.NewFalse(),
+		IsTransferIn:           origOut.IsTransferIn,
+		IsReversal:             true,
+		ReversesStockHistoryId: &origOut.ID,
+	}
+	if err := tx.WithContext(ctx).Create(rev).Error; err != nil {
+		tx.Rollback()
+		t.Fatalf("create reversal: %v", err)
+	}
+	if err := tx.WithContext(ctx).Model(&models.StockHistory{}).Where("id = ?", origOut.ID).Update("reversed_by_stock_history_id", rev.ID).Error; err != nil {
+		tx.Rollback()
+		t.Fatalf("mark original reversed: %v", err)
+	}
+
+	// Replacement row that should be the only "active" outgoing row.
+	replOut := &models.StockHistory{
+		BusinessId:     businessID,
+		WarehouseId:    primary.ID,
+		ProductId:      banana.ID,
+		ProductType:    models.ProductTypeSingle,
+		BatchNumber:    "",
+		StockDate:      origOut.StockDate,
+		Qty:            decimal.NewFromInt(-2),
+		BaseUnitValue:  decimal.NewFromInt(50),
+		Description:    "Invoice",
+		ReferenceType:  models.StockReferenceTypeInvoice,
+		ReferenceID:    12,
+		ReferenceDetailID: 12,
+		IsOutgoing:     utils.NewTrue(),
+		IsTransferIn:   utils.NewFalse(),
+		IsReversal:     false,
+	}
+	if err := tx.WithContext(ctx).Create(replOut).Error; err != nil {
+		tx.Rollback()
+		t.Fatalf("create replacement out: %v", err)
+	}
+
+	// Compute cumulative/closing balances for seeded rows.
+	logger := logrus.New()
+	if _, err := workflow.ProcessIncomingStocks(tx.WithContext(ctx), logger, []*models.StockHistory{opening}); err != nil {
+		tx.Rollback()
+		t.Fatalf("ProcessIncomingStocks(seed opening): %v", err)
+	}
+	if _, err := workflow.ProcessOutgoingStocks(tx.WithContext(ctx), logger, []*models.StockHistory{replOut}); err != nil {
+		tx.Rollback()
+		t.Fatalf("ProcessOutgoingStocks(seed outgoing): %v", err)
+	}
+	if err := tx.Commit().Error; err != nil {
+		t.Fatalf("commit seed: %v", err)
+	}
+
+	asOf := models.MyDateString(time.Date(2026, 1, 31, 0, 0, 0, 0, time.UTC))
+	summary, err := reports.GetInventoryValuationSummaryReport(ctx, asOf, 0)
+	if err != nil {
+		t.Fatalf("GetInventoryValuationSummaryReport: %v", err)
+	}
+	var bananaRow *reports.InventoryValuationSummaryResponse
+	for _, r := range summary {
+		if r != nil && r.ProductID == banana.ID && r.ProductType == "S" {
+			bananaRow = r
+			break
+		}
+	}
+	if bananaRow == nil {
+		t.Fatalf("expected banana row in summary")
+	}
+	// Opening 20, active outgoing -2 => 18.
+	if bananaRow.StockOnHand.Cmp(decimal.NewFromInt(18)) != 0 {
+		t.Fatalf("expected summary stock_on_hand=18; got %s", bananaRow.StockOnHand.String())
+	}
+}
+
 func findWarehouseProductRow(rows []*reports.WarehouseInventoryResponse, warehouseID int, productID int) *reports.WarehouseInventoryResponse {
 	for _, r := range rows {
 		if r == nil {
