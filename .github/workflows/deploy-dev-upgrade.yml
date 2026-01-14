@@ -1,0 +1,52 @@
+name: Deploy (dev-upgrade) to Cloud Run
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-dev-upgrade
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      PROJECT_ID: cashflow-483906
+      REGION: asia-southeast1
+      # Required by deploy-cloudrun.sh
+      REDIS_ADDRESS: ${{ secrets.REDIS_ADDRESS }}
+      # Optional: only needed if REDIS_ADDRESS is private IP (10.x/172.16-31/192.168)
+      VPC_CONNECTOR: ${{ secrets.VPC_CONNECTOR }}
+      # Optional overrides (defaults in script are fine)
+      # API_SERVICE_NAME: api-dev-upgrade-v2
+      # WORKER_SERVICE_NAME: cashflow-backend-dev-upgrade
+      # CLOUDSQL_INSTANCE: cashflow-mysql-dev-upgrade
+      # DB_NAME_2: pitibooks
+      # PUBSUB_TOPIC: CashflowAccountingDevUpgrade
+      # PUBSUB_SUBSCRIPTION: CashflowAccountingDevUpgradeSub
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SA }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Deploy API + Worker + Pub/Sub wiring
+        run: |
+          chmod +x ./deploy/dev-upgrade/*.sh
+          ./deploy/dev-upgrade/deploy-cloudrun-both.sh
+
