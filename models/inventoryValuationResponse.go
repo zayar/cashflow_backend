@@ -64,6 +64,9 @@ func GetInventoryValuation(ctx context.Context, fromDate MyDateString, toDate My
 			and product_id = @productId
 			and product_type = @productType
 			and warehouse_id = @warehouseId
+			-- Only include active ledger rows (exclude reversals and rows that have been reversed).
+			AND sh.is_reversal = 0
+			AND sh.reversed_by_stock_history_id IS NULL
 		order by
 			stock_date desc,
 			cumulative_sequence DESC
@@ -94,6 +97,9 @@ with LastStockHistories AS (
         AND stock_date < @fromDate
         and product_id = @productId
         and product_type = @productType
+		-- Only include active ledger rows (exclude reversals and rows that have been reversed).
+		AND sh.is_reversal = 0
+		AND sh.reversed_by_stock_history_id IS NULL
 )
 SELECT
     sum(closing_asset_value) opening_asset_value,
@@ -125,7 +131,8 @@ group by
 	var priorCount int64
 	countQuery := db.WithContext(ctx).Model(&StockHistory{}).
 		Where("business_id = ? AND product_id = ? AND product_type = ?", businessId, productId, productType).
-		Where("stock_date < ?", fromDate)
+		Where("stock_date < ?", fromDate).
+		Where("is_reversal = 0 AND reversed_by_stock_history_id IS NULL")
 	if warehouseId > 0 {
 		countQuery = countQuery.Where("warehouse_id = ?", warehouseId)
 	}
@@ -149,6 +156,8 @@ WHERE
 	-- fromDate is normalized to UTC start-of-day; use DATE() to avoid timezone equality issues.
 	AND DATE(stock_date) = DATE(@fromDate)
 	AND reference_type IN ('POS', 'PGOS', 'PCOS')
+	AND is_reversal = 0
+	AND reversed_by_stock_history_id IS NULL
 	{{- if gt .warehouseId 0 }}
 	AND warehouse_id = @warehouseId
 	{{- end }}
@@ -266,6 +275,9 @@ WHERE
     AND stock_histories.product_id = @productId
     AND stock_histories.product_type = @productType
     AND stock_histories.stock_date BETWEEN @fromDate AND @toDate
+	-- Only include active ledger rows (exclude reversals and rows that have been reversed).
+	AND stock_histories.is_reversal = 0
+	AND stock_histories.reversed_by_stock_history_id IS NULL
 {{- if .excludeOpeningOnFromDate }}
 	AND NOT (
 		DATE(stock_histories.stock_date) = DATE(@fromDate)

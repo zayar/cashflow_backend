@@ -482,6 +482,208 @@ func TestTransferOrderInventoryValuationByItemIncludesAllFIFOLayersOnDestination
 	}
 }
 
+func TestInventoryValuationByItem_DoesNotDoubleCountTransferReversals(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("INTEGRATION_TESTS")) == "" {
+		t.Skip("set INTEGRATION_TESTS=1 to run integration tests (requires docker)")
+	}
+
+	ctx := context.Background()
+
+	redisName, redisPort := startRedisContainer(t)
+	t.Cleanup(func() { _ = dockerRmForce(redisName) })
+
+	mysqlName, mysqlPort := startMySQLContainer(t)
+	t.Cleanup(func() { _ = dockerRmForce(mysqlName) })
+
+	t.Setenv("REDIS_ADDRESS", fmt.Sprintf("127.0.0.1:%s", redisPort))
+	t.Setenv("DB_USER", "root")
+	t.Setenv("DB_PASSWORD", "testpw")
+	t.Setenv("DB_HOST", "127.0.0.1")
+	t.Setenv("DB_PORT", mysqlPort)
+	t.Setenv("DB_NAME_2", "pitibooks_test")
+	t.Setenv("STOCK_COMMANDS_DOCS", "")
+
+	config.ConnectDatabaseWithRetry()
+	config.ConnectRedisWithRetry()
+	models.MigrateTable()
+
+	ctx = utils.SetUserIdInContext(ctx, 1)
+	ctx = utils.SetUserNameInContext(ctx, "Test")
+	ctx = utils.SetUsernameInContext(ctx, "test@local")
+
+	biz, err := models.CreateBusiness(ctx, &models.NewBusiness{
+		Name:  "Test Biz",
+		Email: "owner@test.local",
+	})
+	if err != nil {
+		t.Fatalf("CreateBusiness: %v", err)
+	}
+	businessID := biz.ID.String()
+	ctx = utils.SetBusinessIdInContext(ctx, businessID)
+
+	db := config.GetDB()
+	var primary models.Warehouse
+	if err := db.WithContext(ctx).Where("business_id = ? AND name = ?", businessID, "Primary Warehouse").First(&primary).Error; err != nil {
+		t.Fatalf("fetch primary warehouse: %v", err)
+	}
+	ygn, err := models.CreateWarehouse(ctx, &models.NewWarehouse{
+		BranchId: biz.PrimaryBranchId,
+		Name:     "YGN",
+	})
+	if err != nil {
+		t.Fatalf("CreateWarehouse: %v", err)
+	}
+	reason, err := models.CreateReason(ctx, &models.NewReason{Name: "Damage"})
+	if err != nil {
+		t.Fatalf("CreateReason: %v", err)
+	}
+	unit, err := models.CreateProductUnit(ctx, &models.NewProductUnit{Name: "Pcs", Abbreviation: "pc", Precision: models.PrecisionZero})
+	if err != nil {
+		t.Fatalf("CreateProductUnit: %v", err)
+	}
+	sysAccounts, err := models.GetSystemAccounts(businessID)
+	if err != nil {
+		t.Fatalf("GetSystemAccounts: %v", err)
+	}
+	invAcc := sysAccounts[models.AccountCodeInventoryAsset]
+	salesAcc := sysAccounts[models.AccountCodeSales]
+	purchaseAcc := sysAccounts[models.AccountCodeCostOfGoodsSold]
+
+	amouage, err := models.CreateProduct(ctx, &models.NewProduct{
+		Name:               "Amouage",
+		Sku:                "AMO-001",
+		Barcode:            "AMO-001",
+		UnitId:             unit.ID,
+		SalesAccountId:     salesAcc,
+		PurchaseAccountId:  purchaseAcc,
+		InventoryAccountId: invAcc,
+		IsBatchTracking:    utils.NewFalse(),
+	})
+	if err != nil {
+		t.Fatalf("CreateProduct: %v", err)
+	}
+
+	business, err := models.GetBusiness(ctx)
+	if err != nil {
+		t.Fatalf("GetBusiness: %v", err)
+	}
+	openingDate := time.Date(2025, 12, 31, 12, 0, 0, 0, time.UTC)
+	stockDate, err := utils.ConvertToDate(openingDate, business.Timezone)
+	if err != nil {
+		t.Fatalf("ConvertToDate: %v", err)
+	}
+
+	// Seed opening stock of 100 @ 100,000 to make asset value visible.
+	logger := logrus.New()
+	tx := db.Begin()
+	opening := &models.StockHistory{
+		BusinessId:    businessID,
+		WarehouseId:   primary.ID,
+		ProductId:     amouage.ID,
+		ProductType:   models.ProductTypeSingle,
+		BatchNumber:   "",
+		StockDate:     stockDate,
+		Qty:           decimal.NewFromInt(100),
+		BaseUnitValue: decimal.NewFromInt(100000),
+		Description:   "Opening Stock",
+		ReferenceType: models.StockReferenceTypeProductOpeningStock,
+		ReferenceID:   amouage.ID,
+		IsOutgoing:    utils.NewFalse(),
+		IsTransferIn:  utils.NewFalse(),
+	}
+	if err := tx.WithContext(ctx).Create(opening).Error; err != nil {
+		tx.Rollback()
+		t.Fatalf("create opening stock history: %v", err)
+	}
+	if err := models.UpdateStockSummaryOpeningQty(tx.WithContext(ctx), businessID, primary.ID, amouage.ID, string(models.ProductTypeSingle), "", decimal.NewFromInt(100), stockDate); err != nil {
+		tx.Rollback()
+		t.Fatalf("UpdateStockSummaryOpeningQty: %v", err)
+	}
+	if _, err := workflow.ProcessIncomingStocks(tx.WithContext(ctx), logger, []*models.StockHistory{opening}); err != nil {
+		tx.Rollback()
+		t.Fatalf("ProcessIncomingStocks(seed): %v", err)
+	}
+	if err := tx.Commit().Error; err != nil {
+		t.Fatalf("commit seed: %v", err)
+	}
+
+	// Transfer 10 out of Primary to YGN on 14 Jan 2026.
+	transferDate := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
+	to, err := models.CreateTransferOrder(ctx, &models.NewTransferOrder{
+		OrderNumber:            "TO-0002",
+		TransferDate:           transferDate,
+		ReasonId:               reason.ID,
+		SourceWarehouseId:      primary.ID,
+		DestinationWarehouseId: ygn.ID,
+		CurrentStatus:          models.TransferOrderStatusConfirmed,
+		Details: []models.NewTransferOrderDetail{
+			{ProductId: amouage.ID, ProductType: models.ProductTypeSingle, Name: "Amouage", TransferQty: decimal.NewFromInt(10)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateTransferOrder: %v", err)
+	}
+	var outbox models.PubSubMessageRecord
+	if err := db.WithContext(ctx).
+		Where("business_id = ? AND reference_type = ? AND reference_id = ?", businessID, models.AccountReferenceTypeTransferOrder, to.ID).
+		Order("id DESC").
+		First(&outbox).Error; err != nil {
+		t.Fatalf("expected outbox record for transfer order: %v", err)
+	}
+	msg := models.ConvertToPubSubMessage(outbox)
+	wtx := db.Begin()
+	if err := workflow.ProcessTransferOrderWorkflow(wtx, logger, msg); err != nil {
+		t.Fatalf("ProcessTransferOrderWorkflow: %v", err)
+	}
+	if err := wtx.Commit().Error; err != nil {
+		t.Fatalf("ProcessTransferOrderWorkflow commit: %v", err)
+	}
+
+	// Source of truth: stock summary should be 90/10.
+	var ssPrimary models.StockSummary
+	if err := db.WithContext(ctx).
+		Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ?", businessID, primary.ID, amouage.ID, models.ProductTypeSingle).
+		First(&ssPrimary).Error; err != nil {
+		t.Fatalf("fetch stock summary (primary): %v", err)
+	}
+	var ssYGN models.StockSummary
+	if err := db.WithContext(ctx).
+		Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ?", businessID, ygn.ID, amouage.ID, models.ProductTypeSingle).
+		First(&ssYGN).Error; err != nil {
+		t.Fatalf("fetch stock summary (ygn): %v", err)
+	}
+	if ssPrimary.CurrentQty.Cmp(decimal.NewFromInt(90)) != 0 {
+		t.Fatalf("expected primary current_qty=90; got %s", ssPrimary.CurrentQty.String())
+	}
+	if ssYGN.CurrentQty.Cmp(decimal.NewFromInt(10)) != 0 {
+		t.Fatalf("expected ygn current_qty=10; got %s", ssYGN.CurrentQty.String())
+	}
+
+	from := models.MyDateString(time.Date(2025, 12, 31, 0, 0, 0, 0, time.UTC))
+	toDate := models.MyDateString(time.Date(2026, 1, 31, 0, 0, 0, 0, time.UTC))
+
+	primaryVal, err := models.GetInventoryValuation(ctx, from, toDate, amouage.ID, models.ProductTypeSingle, primary.ID)
+	if err != nil {
+		t.Fatalf("GetInventoryValuation(primary): %v", err)
+	}
+	if primaryVal.ClosingStockOnHand.Cmp(decimal.NewFromInt(90)) != 0 {
+		t.Fatalf("expected report closing stock (primary)=90; got %s", primaryVal.ClosingStockOnHand.String())
+	}
+	// No unexpected REV lines in the normal report view.
+	for _, d := range primaryVal.Details {
+		if d == nil {
+			continue
+		}
+		if strings.HasPrefix(d.TransactionDescription, "REV:") {
+			t.Fatalf("unexpected REV line in report details: %q", d.TransactionDescription)
+		}
+		// Ensure we don't leak destination warehouse rows into source-warehouse report.
+		if d.WarehouseName != nil && *d.WarehouseName != "Primary Warehouse" {
+			t.Fatalf("unexpected warehouse row in primary report: %q", *d.WarehouseName)
+		}
+	}
+}
+
 func findWarehouseProductRow(rows []*reports.WarehouseInventoryResponse, warehouseID int, productID int) *reports.WarehouseInventoryResponse {
 	for _, r := range rows {
 		if r == nil {
