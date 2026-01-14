@@ -9,4 +9,3 @@ const (
 	OutboxPublishStatusFailed     = "FAILED"
 	OutboxPublishStatusDead       = "DEAD"
 )
-

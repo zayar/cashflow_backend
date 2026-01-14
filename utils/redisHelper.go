@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/config"
 )
 
 var mutex sync.Mutex

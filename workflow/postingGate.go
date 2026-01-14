@@ -3,8 +3,8 @@ package workflow
 import (
 	"context"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
-	"bitbucket.org/mmdatafocus/books_backend/models"
+	"github.com/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/models"
 )
 
 // LockTypeForReferenceType maps a posting reference type to a module lock type.
@@ -61,4 +61,3 @@ func EnforcePostingGate(ctx context.Context, msg config.PubSubMessage) error {
 	}
 	return models.ValidateTransactionLock(ctx, msg.TransactionDateTime, msg.BusinessId, lockType)
 }
-

@@ -3,7 +3,7 @@ package models
 import (
 	"fmt"
 
-	"bitbucket.org/mmdatafocus/books_backend/utils"
+	"github.com/mmdatafocus/books_backend/utils"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
@@ -68,4 +68,3 @@ func ApplyInventoryAdjustmentStockForStatusTransition(tx *gorm.DB, ia *Inventory
 
 	return nil
 }
-

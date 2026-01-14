@@ -8,11 +8,11 @@ import (
 	"sync"
 	"time"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
-	"bitbucket.org/mmdatafocus/books_backend/models"
-	"bitbucket.org/mmdatafocus/books_backend/utils"
-	"bitbucket.org/mmdatafocus/books_backend/workflow"
 	"cloud.google.com/go/pubsub"
+	"github.com/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/models"
+	"github.com/mmdatafocus/books_backend/utils"
+	"github.com/mmdatafocus/books_backend/workflow"
 	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 )

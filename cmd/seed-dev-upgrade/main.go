@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
-	"bitbucket.org/mmdatafocus/books_backend/models"
-	"bitbucket.org/mmdatafocus/books_backend/utils"
+	"github.com/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/models"
+	"github.com/mmdatafocus/books_backend/utils"
 	"gorm.io/gorm"
 )
 
@@ -174,4 +174,3 @@ func main() {
 	fmt.Printf("OwnerUsername: %s\n", strings.TrimSpace(*ownerEmail))
 	fmt.Println("OwnerPassword: (set)")
 }
-

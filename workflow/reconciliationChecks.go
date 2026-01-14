@@ -3,7 +3,7 @@ package workflow
 import (
 	"context"
 
-	"bitbucket.org/mmdatafocus/books_backend/models"
+	"github.com/mmdatafocus/books_backend/models"
 	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 )
@@ -24,4 +24,3 @@ func RunPhase0ReconciliationChecks(ctx context.Context, db *gorm.DB, logger *log
 	}
 	return nil
 }
-

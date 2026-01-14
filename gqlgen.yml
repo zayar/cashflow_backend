@@ -66,8 +66,8 @@ resolver:
 # gqlgen will search for any type names in the schema in these go packages
 # if they match it will use them, otherwise it will generate them.
 autobind:
- - "bitbucket.org/mmdatafocus/books_backend/models"
- - "bitbucket.org/mmdatafocus/books_backend/models/reports"
+ - "github.com/mmdatafocus/books_backend/models"
+ - "github.com/mmdatafocus/books_backend/models/reports"
 
 # This section declares type mapping between the GraphQL and go type systems
 #
@@ -90,6 +90,6 @@ models:
       - github.com/99designs/gqlgen/graphql.UUID
   Decimal:
     model:
-      - bitbucket.org/mmdatafocus/books_backend/graph.Decimal
+      - github.com/mmdatafocus/books_backend/graph.Decimal
   Upload:
     model: github.com/99designs/gqlgen/graphql.Upload

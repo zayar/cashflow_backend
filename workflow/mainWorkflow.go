@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
-	"bitbucket.org/mmdatafocus/books_backend/models"
-	"bitbucket.org/mmdatafocus/books_backend/utils"
+	"github.com/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/models"
+	"github.com/mmdatafocus/books_backend/utils"
 	"github.com/shopspring/decimal"
 	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
@@ -703,98 +703,127 @@ func calculateCogs(tx *gorm.DB, logger *logrus.Logger, productDetail ProductDeta
 		}
 	}
 
+	// Aggregate valuation deltas per (reference_type, reference_id) so we only repost once per document.
+	type journalDeltaKey struct {
+		businessId string
+		refType    models.StockReferenceType
+		refId      int
+		transferIn bool // only used for transfer orders; false=transfer-out
+	}
+	journalDeltas := make(map[journalDeltaKey]map[int]valuationDelta)
+
 	for key, uStock := range uniqueStocks {
-		if eStock, found := existingStocks[key]; found {
-			// if !eStock.TotalValue.Equals(uStock.TotalValue) && uStock.ReferenceType != models.StockReferenceTypeInventoryAdjustmentQuantity {
-			if !eStock.TotalValue.Equals(uStock.TotalValue) {
-				if uStock.ReferenceType == models.StockReferenceTypeTransferOrder {
+		eStock, found := existingStocks[key]
+		if !found {
+			continue
+		}
 
-					// Get System Accounts
-					systemAccounts, err := models.GetSystemAccounts(uStock.BusinessId)
-					if err != nil {
-						config.LogError(logger, "MainWorkflow.go", "CalculateCogs", "GetSystemAccounts", uStock.BusinessId, err)
-						return accountIds, err
-					}
+		delta := uStock.TotalValue.Sub(eStock.TotalValue)
+		if delta.IsZero() {
+			continue
+		}
 
-					err = tx.Exec(`
-							UPDATE account_transactions INNER JOIN account_journals ON account_journals.id = account_transactions.journal_id
-							SET base_debit = base_debit + ?
-							WHERE account_journals.reference_id = ?
-							AND account_journals.reference_type = ?
-							AND account_transactions.account_id = ?
-							AND account_transactions.is_inventory_valuation = true
-							AND account_transactions.is_transfer_in = false
-						`, uStock.TotalValue.Sub(eStock.TotalValue), uStock.ReferenceId, uStock.ReferenceType, systemAccounts[models.AccountCodeGoodsInTransfer]).Error
-					if !slices.Contains(accountIds, systemAccounts[models.AccountCodeGoodsInTransfer]) {
-						accountIds = append(accountIds, systemAccounts[models.AccountCodeGoodsInTransfer])
-					}
-					if err != nil {
-						config.LogError(logger, "MainWorkflow.go", "CalculateCogs", "Update AccountTransactions (GIT TransferOrder)", uStock, err)
-						return accountIds, err
-					}
+		// Update persisted COGS on details (source of truth for reporting).
+		if uStock.ReferenceType == models.StockReferenceTypeSupplierCredit {
+			err = tx.Exec("UPDATE supplier_credit_details SET cogs = cogs + ? WHERE id = ?",
+				delta, uStock.ReferenceDetailId).Error
+		} else if uStock.ReferenceType == models.StockReferenceTypeInvoice {
+			err = tx.Exec("UPDATE sales_invoice_details SET cogs = cogs + ? WHERE id = ?",
+				delta, uStock.ReferenceDetailId).Error
+		}
+		if err != nil {
+			config.LogError(logger, "MainWorkflow.go", "CalculateCogs", "Update Details", uStock, err)
+			return accountIds, err
+		}
 
-					err = tx.Exec(`
-							UPDATE account_transactions INNER JOIN account_journals ON account_journals.id = account_transactions.journal_id
-							SET base_credit = base_credit + ?
-							WHERE account_journals.reference_id = ?
-							AND account_journals.reference_type = ?
-							AND account_transactions.account_id = ?
-							AND account_transactions.is_inventory_valuation = true
-							AND account_transactions.is_transfer_in = false
-						`, uStock.TotalValue.Sub(eStock.TotalValue), uStock.ReferenceId, uStock.ReferenceType, productDetail.InventoryAccountId).Error
-					if !slices.Contains(accountIds, productDetail.InventoryAccountId) {
-						accountIds = append(accountIds, productDetail.InventoryAccountId)
-					}
-					if err != nil {
-						config.LogError(logger, "MainWorkflow.go", "CalculateCogs", "Update AccountTransactions (Inventory TransferOrder)", uStock, err)
-						return accountIds, err
-					}
-				} else {
-					err = tx.Exec(`
-							UPDATE account_transactions INNER JOIN account_journals ON account_journals.id = account_transactions.journal_id
-							SET base_debit = base_debit + ?
-							WHERE account_journals.reference_id = ?
-							AND account_journals.reference_type = ?
-							AND account_transactions.account_id = ?
-							AND account_transactions.is_inventory_valuation = true
-						`, uStock.TotalValue.Sub(eStock.TotalValue), uStock.ReferenceId, uStock.ReferenceType, productDetail.PurchaseAccountId).Error
-					if !slices.Contains(accountIds, productDetail.PurchaseAccountId) {
-						accountIds = append(accountIds, productDetail.PurchaseAccountId)
-					}
-					if err != nil {
-						config.LogError(logger, "MainWorkflow.go", "CalculateCogs", "Update AccountTransactions (Purchase)", uStock, err)
-						return accountIds, err
-					}
+		// Collect journal valuation deltas (append-only ledger via reversal+repost).
+		k := journalDeltaKey{businessId: uStock.BusinessId, refType: uStock.ReferenceType, refId: uStock.ReferenceId, transferIn: false}
+		if uStock.ReferenceType == models.StockReferenceTypeTransferOrder {
+			k.transferIn = false // transfer-out journal only
+		}
 
-					err = tx.Exec(`
-							UPDATE account_transactions INNER JOIN account_journals ON account_journals.id = account_transactions.journal_id
-							SET base_credit = base_credit + ?
-							WHERE account_journals.reference_id = ?
-							AND account_journals.reference_type = ?
-							AND account_transactions.account_id = ?
-							AND account_transactions.is_inventory_valuation = true
-						`, uStock.TotalValue.Sub(eStock.TotalValue), uStock.ReferenceId, uStock.ReferenceType, productDetail.InventoryAccountId).Error
-					if !slices.Contains(accountIds, productDetail.InventoryAccountId) {
-						accountIds = append(accountIds, productDetail.InventoryAccountId)
-					}
-					if err != nil {
-						config.LogError(logger, "MainWorkflow.go", "CalculateCogs", "Update AccountTransactions (Inventory)", uStock, err)
-						return accountIds, err
-					}
-				}
-			}
+		m, ok := journalDeltas[k]
+		if !ok {
+			m = make(map[int]valuationDelta)
+			journalDeltas[k] = m
+		}
 
-			if uStock.ReferenceType == models.StockReferenceTypeSupplierCredit {
-				err = tx.Exec("UPDATE supplier_credit_details SET cogs = cogs + ? WHERE id = ?",
-					uStock.TotalValue.Sub(eStock.TotalValue), uStock.ReferenceDetailId).Error
-			} else if uStock.ReferenceType == models.StockReferenceTypeInvoice {
-				err = tx.Exec("UPDATE sales_invoice_details SET cogs = cogs + ? WHERE id = ?",
-					uStock.TotalValue.Sub(eStock.TotalValue), uStock.ReferenceDetailId).Error
-			}
+		if uStock.ReferenceType == models.StockReferenceTypeTransferOrder {
+			// Transfer out valuation: DR Goods In Transfer, CR Inventory (IsTransferIn=false).
+			systemAccounts, err := models.GetSystemAccounts(uStock.BusinessId)
 			if err != nil {
-				config.LogError(logger, "MainWorkflow.go", "CalculateCogs", "Update Details", uStock, err)
+				config.LogError(logger, "MainWorkflow.go", "CalculateCogs", "GetSystemAccounts", uStock.BusinessId, err)
 				return accountIds, err
 			}
+			git := systemAccounts[models.AccountCodeGoodsInTransfer]
+			m[git] = valuationDelta{
+				BaseDebit:  m[git].BaseDebit.Add(delta),
+				BaseCredit: m[git].BaseCredit,
+			}
+			inv := productDetail.InventoryAccountId
+			m[inv] = valuationDelta{
+				BaseDebit:  m[inv].BaseDebit,
+				BaseCredit: m[inv].BaseCredit.Add(delta),
+			}
+			if !slices.Contains(accountIds, git) {
+				accountIds = append(accountIds, git)
+			}
+			if !slices.Contains(accountIds, inv) {
+				accountIds = append(accountIds, inv)
+			}
+		} else {
+			// Outgoing valuation: DR purchase/COGS, CR inventory.
+			pAcc := productDetail.PurchaseAccountId
+			iAcc := productDetail.InventoryAccountId
+			m[pAcc] = valuationDelta{
+				BaseDebit:  m[pAcc].BaseDebit.Add(delta),
+				BaseCredit: m[pAcc].BaseCredit,
+			}
+			m[iAcc] = valuationDelta{
+				BaseDebit:  m[iAcc].BaseDebit,
+				BaseCredit: m[iAcc].BaseCredit.Add(delta),
+			}
+			if !slices.Contains(accountIds, pAcc) {
+				accountIds = append(accountIds, pAcc)
+			}
+			if !slices.Contains(accountIds, iAcc) {
+				accountIds = append(accountIds, iAcc)
+			}
+		}
+	}
+
+	// Apply aggregated journal reposts.
+	for k, deltas := range journalDeltas {
+		var refType models.AccountReferenceType
+		switch k.refType {
+		case models.StockReferenceTypeInvoice:
+			refType = models.AccountReferenceTypeInvoice
+		case models.StockReferenceTypeSupplierCredit:
+			refType = models.AccountReferenceTypeSupplierCredit
+		case models.StockReferenceTypeTransferOrder:
+			refType = models.AccountReferenceTypeTransferOrder
+		default:
+			// Unknown/unsupported reference types: skip journal repost.
+			continue
+		}
+
+		var transferInFilter *bool
+		if k.refType == models.StockReferenceTypeTransferOrder {
+			transferInFilter = utils.NewFalse()
+		}
+
+		if _, _, err := repostJournalWithValuationDeltas(
+			tx,
+			logger,
+			k.businessId,
+			refType,
+			k.refId,
+			deltas,
+			transferInFilter,
+			ReversalReasonInventoryValuationReprice,
+		); err != nil {
+			config.LogError(logger, "MainWorkflow.go", "CalculateCogs", "repostJournalWithValuationDeltas", k, err)
+			return accountIds, err
 		}
 	}
 
@@ -803,9 +832,15 @@ func calculateCogs(tx *gorm.DB, logger *logrus.Logger, productDetail ProductDeta
 		// 	continue
 		// }
 		if eStockDetail, found := existingStockDetails[key]; found {
-			err = tx.Model(&models.StockHistory{}).Where("id = ?", eStockDetail.Id).Update("qty", uStockDetail.Qty.Neg()).Error
+			_, err = ReplaceStockHistoryByID(tx, eStockDetail.Id, ReversalReasonInventoryValuationReprice, func(newRow *models.StockHistory) {
+				newRow.Qty = uStockDetail.Qty.Neg()
+				newRow.BaseUnitValue = uStockDetail.BaseUnitValue
+				newRow.Description = uStockDetail.Description
+				newRow.StockDate = uStockDetail.StockDate
+				newRow.IsOutgoing = utils.NewTrue()
+			})
 			if err != nil {
-				config.LogError(logger, "MainWorkflow.go", "CalculateCogs", "Update StockHistory", uStockDetail, err)
+				config.LogError(logger, "MainWorkflow.go", "CalculateCogs", "ReplaceStockHistoryByID", uStockDetail, err)
 				return accountIds, err
 			}
 		} else {
@@ -836,9 +871,26 @@ func calculateCogs(tx *gorm.DB, logger *logrus.Logger, productDetail ProductDeta
 		// 	continue
 		// }
 		if _, found := uniqueStockDetails[key]; !found {
-			err = tx.Delete(&models.StockHistory{}, eStockDetail.Id).Error
+			// Do not delete historical stock rows; append a reversal instead (auditability).
+			orig := &models.StockHistory{
+				ID:               eStockDetail.Id,
+				BusinessId:        eStockDetail.BusinessId,
+				WarehouseId:       eStockDetail.WarehouseId,
+				ProductId:         eStockDetail.ProductId,
+				ProductType:       eStockDetail.ProductType,
+				BatchNumber:       eStockDetail.BatchNumber,
+				StockDate:         eStockDetail.StockDate,
+				Qty:               eStockDetail.Qty,
+				BaseUnitValue:     eStockDetail.BaseUnitValue,
+				Description:       eStockDetail.Description,
+				ReferenceType:     eStockDetail.ReferenceType,
+				ReferenceID:       eStockDetail.ReferenceId,
+				ReferenceDetailID: eStockDetail.ReferenceDetailId,
+				IsOutgoing:        utils.NewTrue(),
+			}
+			_, err := ReverseStockHistories(tx, []*models.StockHistory{orig}, ReversalReasonInventoryValuationReprice)
 			if err != nil {
-				config.LogError(logger, "MainWorkflow.go", "CalculateCogs", "DeleteStockHistory", eStockDetail, err)
+				config.LogError(logger, "MainWorkflow.go", "CalculateCogs", "ReverseStockHistory", eStockDetail, err)
 				return accountIds, err
 			}
 		}
@@ -851,6 +903,10 @@ func revaluateCreditNotes(tx *gorm.DB, logger *logrus.Logger, stockHistories []*
 	var baseUnitValue decimal.Decimal
 	var productDetail ProductDetail
 	var err error
+
+	// Aggregate valuation deltas per CreditNote reference, then repost journals once per reference
+	// (append-only ledger).
+	creditNoteJournalDeltas := make(map[int]map[int]valuationDelta) // reference_id -> (account_id -> delta)
 
 	for _, stockHistory := range stockHistories {
 		productDetail, err = GetProductDetail(tx, stockHistory.ProductId, stockHistory.ProductType)
@@ -871,6 +927,8 @@ func revaluateCreditNotes(tx *gorm.DB, logger *logrus.Logger, stockHistories []*
 				warehouse_id = ? 
 				AND stock_date <= ? 
 				AND is_outgoing = false
+				AND is_reversal = 0
+				AND reversed_by_stock_history_id IS NULL
 				AND reference_type != 'CN'
 				AND product_id = ? AND product_type = ? AND batch_number = ?
 			)
@@ -880,8 +938,8 @@ func revaluateCreditNotes(tx *gorm.DB, logger *logrus.Logger, stockHistories []*
 			LastStockHistories
 		WHERE 
 			rn = 1;
-		`, stockHistories[0].WarehouseId, stockHistories[0].StockDate, stockHistories[0].ProductId,
-			stockHistories[0].ProductType, stockHistories[0].BatchNumber).
+		`, stockHistory.WarehouseId, stockHistory.StockDate, stockHistory.ProductId,
+			stockHistory.ProductType, stockHistory.BatchNumber).
 			Find(&lastIncomingStockHistories).Error
 		if err != nil {
 			config.LogError(logger, "MainWorkflow.go", "RevaluateCreditNotes", "GetLastIncomingStockHistory", stockHistory, err)
@@ -891,38 +949,34 @@ func revaluateCreditNotes(tx *gorm.DB, logger *logrus.Logger, stockHistories []*
 			baseUnitValue = lastIncomingStockHistories[0].BaseUnitValue
 		}
 		if stockHistory.ReferenceType == models.StockReferenceTypeCreditNote {
-			stockHistory.BaseUnitValue = baseUnitValue
-			err = tx.Model(&stockHistory).Update("base_unit_value", baseUnitValue).Error
+			_, err = ReplaceStockHistoryByID(tx, stockHistory.ID, ReversalReasonInventoryValuationReprice, func(newRow *models.StockHistory) {
+				newRow.BaseUnitValue = baseUnitValue
+			})
 			if err != nil {
-				config.LogError(logger, "MainWorkflow.go", "RevaluateCreditNotes", "UpdateStockHistory", stockHistory, err)
+				config.LogError(logger, "MainWorkflow.go", "RevaluateCreditNotes", "ReplaceStockHistoryByID", stockHistory, err)
 				return err
 			}
-			err = tx.Exec(`
-					UPDATE account_transactions INNER JOIN account_journals ON account_journals.id = account_transactions.journal_id
-					SET base_credit = base_credit + ?
-					WHERE account_journals.reference_id = ?
-					AND account_journals.reference_type = ?
-					AND account_transactions.account_id = ?
-					AND account_transactions.is_inventory_valuation = true
-				`, stockHistory.Qty.Mul(baseUnitValue), stockHistory.ReferenceID, stockHistory.ReferenceType, productDetail.PurchaseAccountId).Error
-			if err != nil {
-				config.LogError(logger, "MainWorkflow.go", "RevaluateCreditNotes", "Update AccountTransactions (Purchase)", stockHistory, err)
-				return err
+
+			// Credit note valuation: DR inventory, CR purchase/COGS (same direction as existing code).
+			delta := stockHistory.Qty.Mul(baseUnitValue)
+			m, ok := creditNoteJournalDeltas[stockHistory.ReferenceID]
+			if !ok {
+				m = make(map[int]valuationDelta)
+				creditNoteJournalDeltas[stockHistory.ReferenceID] = m
 			}
-			err = tx.Exec(`
-				UPDATE account_transactions INNER JOIN account_journals ON account_journals.id = account_transactions.journal_id
-				SET base_debit = base_debit + ?
-				WHERE account_journals.reference_id = ?
-				AND account_journals.reference_type = ?
-				AND account_transactions.account_id = ?
-				AND account_transactions.is_inventory_valuation = true
-			`, stockHistory.Qty.Mul(baseUnitValue), stockHistory.ReferenceID, stockHistory.ReferenceType, productDetail.InventoryAccountId).Error
-			if err != nil {
-				config.LogError(logger, "MainWorkflow.go", "RevaluateCreditNotes", "Update AccountTransactions (Inventory)", stockHistory, err)
-				return err
+			pAcc := productDetail.PurchaseAccountId
+			iAcc := productDetail.InventoryAccountId
+			m[pAcc] = valuationDelta{
+				BaseDebit:  m[pAcc].BaseDebit,
+				BaseCredit: m[pAcc].BaseCredit.Add(delta),
 			}
+			m[iAcc] = valuationDelta{
+				BaseDebit:  m[iAcc].BaseDebit.Add(delta),
+				BaseCredit: m[iAcc].BaseCredit,
+			}
+
 			err = tx.Exec("UPDATE credit_note_details SET cogs = cogs + ? WHERE id = ?",
-				stockHistory.Qty.Mul(baseUnitValue), stockHistory.ReferenceDetailID).Error
+				delta, stockHistory.ReferenceDetailID).Error
 			if err != nil {
 				config.LogError(logger, "MainWorkflow.go", "RevaluateCreditNotes", "Update Details", stockHistory, err)
 				return err
@@ -938,6 +992,8 @@ func revaluateCreditNotes(tx *gorm.DB, logger *logrus.Logger, stockHistories []*
 							FROM stock_histories AS sh
 							WHERE sh.warehouse_id = ? AND sh.product_id = ? AND sh.product_type = ?
 								AND sh.batch_number = ? AND sh.stock_date > ?
+								AND sh.is_reversal = 0
+								AND sh.reversed_by_stock_history_id IS NULL
 						)
 						, IncomingLimit AS (
 							SELECT COALESCE(MIN(rn), (SELECT MAX(rn) + 1 FROM CTE)) AS limit_row
@@ -961,6 +1017,8 @@ func revaluateCreditNotes(tx *gorm.DB, logger *logrus.Logger, stockHistories []*
 							FROM stock_histories AS sh
 							WHERE sh.warehouse_id = ? AND sh.product_id = ? AND sh.product_type = ?
 								AND sh.batch_number = ? AND sh.stock_date >= ?
+								AND sh.is_reversal = 0
+								AND sh.reversed_by_stock_history_id IS NULL
 						)
 						, IncomingLimit AS (
 							SELECT COALESCE(MIN(rn), (SELECT MAX(rn) + 1 FROM CTE)) AS limit_row
@@ -984,37 +1042,33 @@ func revaluateCreditNotes(tx *gorm.DB, logger *logrus.Logger, stockHistories []*
 			for _, creditNote := range creditNotes {
 				oldCogs := creditNote.Qty.Mul(creditNote.BaseUnitValue)
 				cogs := creditNote.Qty.Mul(baseUnitValue)
-				err = tx.Model(&creditNote).Update("base_unit_value", baseUnitValue).Error
+				_, err = ReplaceStockHistoryByID(tx, creditNote.ID, ReversalReasonInventoryValuationReprice, func(newRow *models.StockHistory) {
+					newRow.BaseUnitValue = baseUnitValue
+				})
 				if err != nil {
-					config.LogError(logger, "MainWorkflow.go", "RevaluateCreditNotes", "UpdateCreditNoteStockHistory", creditNote, err)
+					config.LogError(logger, "MainWorkflow.go", "RevaluateCreditNotes", "ReplaceStockHistoryByID (CreditNote)", creditNote, err)
 					return err
 				}
-				err = tx.Exec(`
-					UPDATE account_transactions INNER JOIN account_journals ON account_journals.id = account_transactions.journal_id
-					SET base_credit = base_credit + ?
-					WHERE account_journals.reference_id = ?
-					AND account_journals.reference_type = ?
-					AND account_transactions.account_id = ?
-					AND account_transactions.is_inventory_valuation = true
-				`, cogs.Sub(oldCogs), creditNote.ReferenceID, creditNote.ReferenceType, productDetail.PurchaseAccountId).Error
-				if err != nil {
-					config.LogError(logger, "MainWorkflow.go", "RevaluateCreditNotes", "Update CreditNote AccountTransactions (Purchase)", creditNote, err)
-					return err
+
+				delta := cogs.Sub(oldCogs)
+				m, ok := creditNoteJournalDeltas[creditNote.ReferenceID]
+				if !ok {
+					m = make(map[int]valuationDelta)
+					creditNoteJournalDeltas[creditNote.ReferenceID] = m
 				}
-				err = tx.Exec(`
-				UPDATE account_transactions INNER JOIN account_journals ON account_journals.id = account_transactions.journal_id
-				SET base_debit = base_debit + ?
-				WHERE account_journals.reference_id = ?
-				AND account_journals.reference_type = ?
-				AND account_transactions.account_id = ?
-				AND account_transactions.is_inventory_valuation = true
-			`, cogs.Sub(oldCogs), creditNote.ReferenceID, creditNote.ReferenceType, productDetail.InventoryAccountId).Error
-				if err != nil {
-					config.LogError(logger, "MainWorkflow.go", "RevaluateCreditNotes", "Update CreditNote AccountTransactions (Inventory)", creditNote, err)
-					return err
+				pAcc := productDetail.PurchaseAccountId
+				iAcc := productDetail.InventoryAccountId
+				m[pAcc] = valuationDelta{
+					BaseDebit:  m[pAcc].BaseDebit,
+					BaseCredit: m[pAcc].BaseCredit.Add(delta),
 				}
+				m[iAcc] = valuationDelta{
+					BaseDebit:  m[iAcc].BaseDebit.Add(delta),
+					BaseCredit: m[iAcc].BaseCredit,
+				}
+
 				err = tx.Exec("UPDATE credit_note_details SET cogs = cogs + ? WHERE id = ?",
-					cogs.Sub(oldCogs), creditNote.ReferenceDetailID).Error
+					delta, creditNote.ReferenceDetailID).Error
 				if err != nil {
 					config.LogError(logger, "MainWorkflow.go", "RevaluateCreditNotes", "Update CreditNoteDetails", creditNote, err)
 					return err
@@ -1022,6 +1076,40 @@ func revaluateCreditNotes(tx *gorm.DB, logger *logrus.Logger, stockHistories []*
 			}
 		}
 	}
+
+	// Repost CreditNote journals with aggregated valuation deltas.
+	for refId, deltas := range creditNoteJournalDeltas {
+		businessId := ""
+		if len(stockHistories) > 0 {
+			businessId = stockHistories[0].BusinessId
+		}
+		if businessId == "" {
+			// Fallback: derive tenant from the credit note stock history rows.
+			for _, sh := range stockHistories {
+				if sh.ReferenceID == refId {
+					businessId = sh.BusinessId
+					break
+				}
+			}
+		}
+		if businessId == "" {
+			continue
+		}
+		if _, _, err := repostJournalWithValuationDeltas(
+			tx,
+			logger,
+			businessId,
+			models.AccountReferenceTypeCreditNote,
+			refId,
+			deltas,
+			nil,
+			ReversalReasonInventoryValuationReprice,
+		); err != nil {
+			config.LogError(logger, "MainWorkflow.go", "RevaluateCreditNotes", "repostJournalWithValuationDeltas", refId, err)
+			return err
+		}
+	}
+
 	return err
 }
 

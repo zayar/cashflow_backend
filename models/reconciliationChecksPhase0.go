@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
-	"bitbucket.org/mmdatafocus/books_backend/utils"
 	"github.com/google/uuid"
+	"github.com/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/utils"
 	"github.com/sirupsen/logrus"
 )
 
@@ -125,13 +125,12 @@ func RunPhase0ReconciliationChecks(ctx context.Context, businessId string) (corr
 
 	if logger != nil {
 		logger.WithFields(logrus.Fields{
-			"field":           "ReconciliationChecks",
-			"business_id":     businessId,
-			"correlation_id":  cid,
-			"invoice_checked": len(invoices),
+			"field":            "ReconciliationChecks",
+			"business_id":      businessId,
+			"correlation_id":   cid,
+			"invoice_checked":  len(invoices),
 			"stock_mismatches": len(mismatches),
 		}).Info("phase0 reconciliation checks completed")
 	}
 	return cid, nil
 }
-

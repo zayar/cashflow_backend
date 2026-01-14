@@ -11,10 +11,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
-	"bitbucket.org/mmdatafocus/books_backend/utils"
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/disintegration/imaging"
+	"github.com/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/utils"
 	"gorm.io/gorm"
 )
 

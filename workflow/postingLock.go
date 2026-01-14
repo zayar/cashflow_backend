@@ -25,4 +25,3 @@ func ReleaseBusinessPostingLock(tx *gorm.DB, businessId string) {
 	var _ok int
 	_ = tx.Raw("SELECT RELEASE_LOCK(?)", lockName).Scan(&_ok).Error
 }
-

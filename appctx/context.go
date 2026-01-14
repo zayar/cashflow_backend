@@ -43,4 +43,3 @@ func GetInt(ctx context.Context, key ContextKey) (int, bool) {
 func Set(ctx context.Context, key ContextKey, value any) context.Context {
 	return context.WithValue(ctx, key, value)
 }
-

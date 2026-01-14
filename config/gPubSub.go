@@ -225,4 +225,3 @@ func PublicIntegrationWorkflow(topicName string, obj interface{}) error {
 	_, err = result.Get(ctx)
 	return err
 }
-

@@ -6,7 +6,7 @@ import (
 	"github.com/graph-gophers/dataloader/v7"
 	"gorm.io/gorm"
 
-	"bitbucket.org/mmdatafocus/books_backend/models"
+	"github.com/mmdatafocus/books_backend/models"
 )
 
 type accountReader struct {

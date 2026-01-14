@@ -351,7 +351,7 @@ backend/
 ├── go.mod
 ├── go.sum
 ├── Dockerfile
-└── bitbucket-pipelines.yml   # CI/CD configuration
+└── ci/                       # CI/CD configuration (provider-agnostic)
 
 functions/
 ├── functions/

@@ -3,13 +3,14 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strconv"
 	"time"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
-	"bitbucket.org/mmdatafocus/books_backend/models"
-	"bitbucket.org/mmdatafocus/books_backend/utils"
+	"github.com/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/models"
+	"github.com/mmdatafocus/books_backend/utils"
 	"github.com/shopspring/decimal"
 	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
@@ -216,33 +217,90 @@ func CreateTransferOrder(tx *gorm.DB, logger *logrus.Logger, recordId int, recor
 	}
 
 	for _, updatedOutStock := range updatedTransferOutStockHistories {
-		updatedOutStock.ID = 0
-		updatedOutStock.WarehouseId = destinationWarehouse.ID
-		updatedOutStock.Qty = updatedOutStock.Qty.Abs()
-		updatedOutStock.Description = "Transfer In"
-		updatedOutStock.IsOutgoing = utils.NewFalse()
-		updatedOutStock.IsTransferIn = utils.NewTrue()
-		updatedOutStock.ClosingQty = decimal.NewFromInt(0)
-		updatedOutStock.ClosingAssetValue = decimal.NewFromInt(0)
-		updatedOutStock.CumulativeIncomingQty = decimal.NewFromInt(0)
-		updatedOutStock.CumulativeOutgoingQty = decimal.NewFromInt(0)
-		err = tx.Create(&updatedOutStock).Error
+		// Clone each outgoing valuation row into an incoming row for destination.
+		//
+		// IMPORTANT:
+		// - Outgoing processing can split a transfer line into multiple rows (FIFO layers).
+		// - Destination MUST receive ALL those rows (qty and unit cost) to keep valuation consistent.
+		// - Do NOT mutate the original outgoing rows in-place.
+		if updatedOutStock == nil {
+			continue
+		}
+		if updatedOutStock.IsOutgoing == nil || !*updatedOutStock.IsOutgoing {
+			// Defensive: only clone outgoing rows.
+			continue
+		}
+		if updatedOutStock.IsReversal || updatedOutStock.ReversedByStockHistoryId != nil {
+			// Defensive: never clone reversal rows.
+			continue
+		}
+		if updatedOutStock.WarehouseId != sourceWarehouse.ID {
+			// Defensive: only clone from source warehouse postings.
+			continue
+		}
+
+		in := *updatedOutStock
+		in.ID = 0
+		in.WarehouseId = destinationWarehouse.ID
+		in.Qty = in.Qty.Abs()
+		in.Description = "Transfer In"
+		in.IsOutgoing = utils.NewFalse()
+		in.IsTransferIn = utils.NewTrue()
+		in.ClosingQty = decimal.NewFromInt(0)
+		in.ClosingAssetValue = decimal.NewFromInt(0)
+		in.CumulativeIncomingQty = decimal.NewFromInt(0)
+		in.CumulativeOutgoingQty = decimal.NewFromInt(0)
+		in.CumulativeSequence = 0
+		// Ensure transfer-in row isn't treated as a reversal.
+		in.IsReversal = false
+		in.ReversesStockHistoryId = nil
+		in.ReversedByStockHistoryId = nil
+		in.ReversalReason = nil
+		in.ReversedAt = nil
+
+		err = tx.Create(&in).Error
 		if err != nil {
 			tx.Rollback()
-			config.LogError(logger, "TransferOrderWorkflow.go", "CreateTransferOrder", "CreateDestinationStockHistory", updatedOutStock, err)
+			config.LogError(logger, "TransferOrderWorkflow.go", "CreateTransferOrder", "CreateDestinationStockHistory", in, err)
 			return 0, nil, 0, err
 		}
-		transferInStockHistories = append(transferInStockHistories, updatedOutStock)
+		transferInStockHistories = append(transferInStockHistories, &in)
 	}
 
-	var updatedAccountTransactions []*models.AccountTransaction
-	err = tx.Where("business_id = ? AND journal_id = ? AND branch_id = ?", businessId, accJournal.ID, sourceBranchId).Find(&updatedAccountTransactions).Error
+	// NOTE: COGS/valuation can trigger a journal repost (reverse+replace).
+	// Always fetch the current active SOURCE journal (IsTransferIn=false) by reference.
+	var activeJournals []*models.AccountJournal
+	err = tx.Preload("AccountTransactions").
+		Where("business_id = ? AND reference_id = ? AND reference_type = ? AND is_reversal = 0 AND reversed_by_journal_id IS NULL",
+			businessId, transferOrder.ID, models.AccountReferenceTypeTransferOrder).
+		Find(&activeJournals).Error
 	if err != nil {
-		config.LogError(logger, "TransferOrderWorkflow.go", "CreateTransferOrder", "GetUpdatedAccountTransactions", transferOrder.ID, err)
+		config.LogError(logger, "TransferOrderWorkflow.go", "CreateTransferOrder", "GetActiveSourceAccountJournalCandidates", transferOrder.ID, err)
 		return 0, nil, 0, err
 	}
 
-	for _, updatedAccTransact := range updatedAccountTransactions {
+	var sourceJournal *models.AccountJournal
+	for _, j := range activeJournals {
+		if j.BranchId != sourceBranchId {
+			continue
+		}
+		for _, t := range j.AccountTransactions {
+			if t.IsTransferIn != nil && *t.IsTransferIn {
+				continue
+			}
+			sourceJournal = j
+			break
+		}
+		if sourceJournal != nil {
+			break
+		}
+	}
+	if sourceJournal == nil {
+		config.LogError(logger, "TransferOrderWorkflow.go", "CreateTransferOrder", "ActiveSourceAccountJournalNotFound", transferOrder.ID, nil)
+		return 0, nil, 0, fmt.Errorf("active source account journal not found for transfer order %d", transferOrder.ID)
+	}
+
+	for _, updatedAccTransact := range sourceJournal.AccountTransactions {
 		updatedAccTransact.ID = 0
 		updatedAccTransact.BranchId = destinationBranchId
 		updatedAccTransact.IsTransferIn = utils.NewTrue()
@@ -254,7 +312,7 @@ func CreateTransferOrder(tx *gorm.DB, logger *logrus.Logger, recordId int, recor
 			updatedAccTransact.BaseDebit = updatedAccTransact.BaseCredit
 			updatedAccTransact.BaseCredit = decimal.NewFromInt(0)
 		}
-		destinationAccTransactions = append(destinationAccTransactions, *updatedAccTransact)
+		destinationAccTransactions = append(destinationAccTransactions, updatedAccTransact)
 	}
 
 	destinationAccJournal := models.AccountJournal{

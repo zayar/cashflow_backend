@@ -3,8 +3,8 @@ package workflow
 import (
 	"strconv"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
-	"bitbucket.org/mmdatafocus/books_backend/models"
+	"github.com/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/models"
 	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 )

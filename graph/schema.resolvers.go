@@ -9,12 +9,12 @@ import (
 	"fmt"
 	"time"
 
-	"bitbucket.org/mmdatafocus/books_backend/middlewares"
-	"bitbucket.org/mmdatafocus/books_backend/models"
-	"bitbucket.org/mmdatafocus/books_backend/models/reports"
-	"bitbucket.org/mmdatafocus/books_backend/utils"
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/google/uuid"
+	"github.com/mmdatafocus/books_backend/middlewares"
+	"github.com/mmdatafocus/books_backend/models"
+	"github.com/mmdatafocus/books_backend/models/reports"
+	"github.com/mmdatafocus/books_backend/utils"
 	"github.com/shopspring/decimal"
 )
 

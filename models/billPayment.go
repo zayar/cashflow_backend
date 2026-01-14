@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/config"
 	"github.com/shopspring/decimal"
 )
 

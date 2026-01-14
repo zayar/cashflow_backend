@@ -1,8 +1,8 @@
 package workflow
 
 import (
-	"bitbucket.org/mmdatafocus/books_backend/models"
-	"bitbucket.org/mmdatafocus/books_backend/utils"
+	"github.com/mmdatafocus/books_backend/models"
+	"github.com/mmdatafocus/books_backend/utils"
 	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 )
@@ -43,4 +43,3 @@ func ProcessStockHistories(tx *gorm.DB, logger *logrus.Logger, stockHistories []
 	}
 	return accountIds, nil
 }
-

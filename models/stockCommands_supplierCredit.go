@@ -3,7 +3,7 @@ package models
 import (
 	"fmt"
 
-	"bitbucket.org/mmdatafocus/books_backend/utils"
+	"github.com/mmdatafocus/books_backend/utils"
 	"gorm.io/gorm"
 )
 
@@ -69,4 +69,3 @@ func ApplySupplierCreditStockForStatusTransition(tx *gorm.DB, sc *SupplierCredit
 	}
 	return nil
 }
-

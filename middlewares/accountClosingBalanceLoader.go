@@ -3,8 +3,8 @@ package middlewares
 import (
 	"context"
 
-	"bitbucket.org/mmdatafocus/books_backend/models"
 	"github.com/graph-gophers/dataloader/v7"
+	"github.com/mmdatafocus/books_backend/models"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )

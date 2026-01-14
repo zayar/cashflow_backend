@@ -34,14 +34,14 @@ type DetailLedgerTransaction struct {
 	ForeignCredit       decimal.Decimal
 	ExchangeRate        decimal.Decimal
 	// BaseClosingBalance  decimal.Decimal
-	TransactionType    string
-	TransactionNumber  string
-	TransactionDetails string
-	ReferenceNumber    string
-	CustomerName       string
-	SupplierName       string
-	ForeignCurrencyName        string
-	ForeignCurrencySymbol      string
+	TransactionType       string
+	TransactionNumber     string
+	TransactionDetails    string
+	ReferenceNumber       string
+	CustomerName          string
+	SupplierName          string
+	ForeignCurrencyName   string
+	ForeignCurrencySymbol string
 }
 
 type AccountSummary struct {
@@ -72,31 +72,31 @@ type TrialBalance struct {
 }
 
 type BalanceSheet struct {
-	Id               int
-	AccountMainType  string
-	AccountGroupType string
-	AccountSubType   string
-	AccountName      string
+	Id                int
+	AccountMainType   string
+	AccountGroupType  string
+	AccountSubType    string
+	AccountName       string
 	ParentAccountName string
-	ParentAccountId int
-	AccountId        int
-	Amount           decimal.Decimal
+	ParentAccountId   int
+	AccountId         int
+	Amount            decimal.Decimal
 }
 
 type SubAccount struct {
-    AccountName       string       `json:"account_name"`
-    AccountId         int          `json:"account_id"`
-    Amount            decimal.Decimal `json:"amount"`
-    ParentAccountName string       `json:"parent_account_name"`
+	AccountName       string          `json:"account_name"`
+	AccountId         int             `json:"account_id"`
+	Amount            decimal.Decimal `json:"amount"`
+	ParentAccountName string          `json:"parent_account_name"`
 }
 
 type SubType struct {
-	AccountName 	  string
-	AccountId   	  int
+	AccountName       string
+	AccountId         int
 	ParentAccountName string
-	Amount      	  decimal.Decimal
-	Total             decimal.Decimal `json:"total,omitempty"` 
-    SubAccounts       []SubAccount `json:"subAccounts,omitempty"`
+	Amount            decimal.Decimal
+	Total             decimal.Decimal `json:"total,omitempty"`
+	SubAccounts       []SubAccount    `json:"subAccounts,omitempty"`
 }
 
 type GroupType struct {

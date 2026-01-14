@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
-	"bitbucket.org/mmdatafocus/books_backend/utils"
+	"github.com/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/utils"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )

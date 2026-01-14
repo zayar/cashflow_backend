@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
-	"bitbucket.org/mmdatafocus/books_backend/utils"
+	"github.com/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/utils"
 	"github.com/shopspring/decimal"
 )
 
@@ -485,13 +485,17 @@ func DeleteRecurringBill(ctx context.Context, id int) (*RecurringBill, error) {
 	// 	return nil, err
 	// }
 
-	err = db.WithContext(ctx).Model(&result).Association("Details").Unscoped().Clear()
-	if err != nil {
+	// Ensure association cleanup + delete are atomic.
+	tx := db.Begin()
+	if err := tx.WithContext(ctx).Model(&result).Association("Details").Unscoped().Clear(); err != nil {
+		tx.Rollback()
 		return nil, err
 	}
-
-	err = db.WithContext(ctx).Delete(&result).Error
-	if err != nil {
+	if err := tx.WithContext(ctx).Delete(&result).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	if err := tx.Commit().Error; err != nil {
 		return nil, err
 	}
 

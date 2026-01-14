@@ -3,7 +3,7 @@ package utils
 import (
 	"context"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/config"
 	"gorm.io/gorm"
 )
 

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
-	"bitbucket.org/mmdatafocus/books_backend/models"
 	"github.com/google/uuid"
+	"github.com/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/models"
 	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -18,22 +18,22 @@ type OutboxDispatcher struct {
 	Logger       *logrus.Logger
 	DispatcherID string
 
-	BatchSize     int
-	PollInterval  time.Duration
-	LockTimeout   time.Duration
-	MaxAttempts   int
+	BatchSize      int
+	PollInterval   time.Duration
+	LockTimeout    time.Duration
+	MaxAttempts    int
 	InitialBackoff time.Duration
 }
 
 func NewOutboxDispatcher(db *gorm.DB, logger *logrus.Logger) *OutboxDispatcher {
 	return &OutboxDispatcher{
-		DB:            db,
-		Logger:        logger,
-		DispatcherID:  uuid.NewString(),
-		BatchSize:     50,
-		PollInterval:  500 * time.Millisecond,
-		LockTimeout:   30 * time.Second,
-		MaxAttempts:   20,
+		DB:             db,
+		Logger:         logger,
+		DispatcherID:   uuid.NewString(),
+		BatchSize:      50,
+		PollInterval:   500 * time.Millisecond,
+		LockTimeout:    30 * time.Second,
+		MaxAttempts:    20,
 		InitialBackoff: 5 * time.Second,
 	}
 }
@@ -114,12 +114,12 @@ func (d *OutboxDispatcher) dispatchOnce(ctx context.Context) {
 			claimed[i].PublishAttempts = claimed[i].PublishAttempts + 1
 			claimed[i].LastPublishError = nil
 			if err := tx.Model(&models.PubSubMessageRecord{}).Where("id = ?", claimed[i].ID).Updates(map[string]interface{}{
-				"publish_status":      claimed[i].PublishStatus,
-				"locked_at":           claimed[i].LockedAt,
-				"locked_by":           claimed[i].LockedBy,
-				"publish_attempts":    gorm.Expr("publish_attempts + 1"),
-				"last_publish_error":  nil,
-				"next_attempt_at":     nil,
+				"publish_status":     claimed[i].PublishStatus,
+				"locked_at":          claimed[i].LockedAt,
+				"locked_by":          claimed[i].LockedBy,
+				"publish_attempts":   gorm.Expr("publish_attempts + 1"),
+				"last_publish_error": nil,
+				"next_attempt_at":    nil,
 			}).Error; err != nil {
 				return err
 			}
@@ -151,12 +151,12 @@ func (d *OutboxDispatcher) markPublishSent(ctx context.Context, recordID int, bu
 	_ = db.Model(&models.PubSubMessageRecord{}).
 		Where("id = ?", recordID).
 		Updates(map[string]interface{}{
-			"publish_status":   models.OutboxPublishStatusSent,
-			"published_at":     &now,
+			"publish_status":     models.OutboxPublishStatusSent,
+			"published_at":       &now,
 			"pub_sub_message_id": &id,
-			"locked_at":        nil,
-			"locked_by":        nil,
-			"next_attempt_at":  nil,
+			"locked_at":          nil,
+			"locked_by":          nil,
+			"next_attempt_at":    nil,
 		}).Error
 }
 
@@ -209,12 +209,11 @@ func (d *OutboxDispatcher) markPublishFailed(ctx context.Context, recordID int, 
 
 	if d.Logger != nil {
 		d.Logger.WithFields(logrus.Fields{
-			"field":          "OutboxDispatcher",
-			"business_id":    businessID,
-			"record_id":      recordID,
-			"attempt":        attempt,
+			"field":           "OutboxDispatcher",
+			"business_id":     businessID,
+			"record_id":       recordID,
+			"attempt":         attempt,
 			"next_attempt_at": next.Format(time.RFC3339Nano),
 		}).Error("outbox publish failed: " + fmt.Sprintf("%v", err))
 	}
 }
-

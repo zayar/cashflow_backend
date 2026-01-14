@@ -5,8 +5,8 @@ import (
 	"errors"
 	"time"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
-	"bitbucket.org/mmdatafocus/books_backend/utils"
+	"github.com/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/utils"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
@@ -106,9 +106,44 @@ func (input NewInventoryAdjustment) validate(ctx context.Context, businessId str
 		return errors.New("reason not found")
 	}
 	// validate each product for inventory adjustment date
+	business, err := GetBusinessById(ctx, businessId)
+	if err != nil {
+		return err
+	}
+	adjDate, err := utils.ConvertToDate(input.AdjustmentDate, business.Timezone)
+	if err != nil {
+		return err
+	}
 	for _, inputDetail := range input.Details {
 		if err := ValidateValueAdjustment(ctx, businessId, input.AdjustmentDate, inputDetail.ProductType, inputDetail.ProductId, &inputDetail.BatchNumber, input.AdjustmentType == InventoryAdjustmentTypeValue); err != nil {
 			return err
+		}
+
+		// Guardrails for VALUE adjustments:
+		// - Prevent creating negative inventory value unless explicitly supported.
+		// - Value adjustments operate on existing stock on hand; disallow when qty <= 0.
+		if input.AdjustmentType == InventoryAdjustmentTypeValue && inputDetail.ProductId > 0 {
+			db := config.GetDB()
+			var last StockHistory
+			if err := db.WithContext(ctx).
+				Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND stock_date <= ?",
+					businessId, input.WarehouseId, inputDetail.ProductId, inputDetail.ProductType, inputDetail.BatchNumber, adjDate).
+				Order("stock_date DESC, cumulative_sequence DESC").
+				Limit(1).
+				Find(&last).Error; err != nil {
+				return err
+			}
+			if last.ID <= 0 {
+				// This is also checked later during status transition; keep this early for better UX.
+				return errors.New("inventory valuation is not ready for this item yet (stock history missing). Please wait a moment and try again, or ensure opening stock posting has completed.")
+			}
+			if last.ClosingQty.LessThanOrEqual(decimal.Zero) {
+				return errors.New("cannot adjust inventory value when stock on hand is zero")
+			}
+			finalValue := last.ClosingAssetValue.Add(inputDetail.AdjustedValue)
+			if finalValue.IsNegative() {
+				return errors.New("value adjustment would make inventory value negative")
+			}
 		}
 	}
 

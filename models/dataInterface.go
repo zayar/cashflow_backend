@@ -3,7 +3,7 @@ package models
 import (
 	"time"
 
-	"bitbucket.org/mmdatafocus/books_backend/utils"
+	"github.com/mmdatafocus/books_backend/utils"
 )
 
 type Identifier interface {

@@ -5,10 +5,10 @@ import (
 	"reflect"
 	"time"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
-	"bitbucket.org/mmdatafocus/books_backend/models"
 	"github.com/gin-gonic/gin"
 	"github.com/graph-gophers/dataloader/v7"
+	"github.com/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/models"
 	"gorm.io/gorm"
 )
 

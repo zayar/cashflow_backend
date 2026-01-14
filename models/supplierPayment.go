@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
-	"bitbucket.org/mmdatafocus/books_backend/utils"
+	"github.com/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/utils"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
@@ -412,7 +412,7 @@ func DeleteSupplierPayment(ctx context.Context, id int) (*SupplierPayment, error
 		billAdvanceAmount := bill.BillTotalAdvanceUsedAmount
 		billCreditAmount := bill.BillTotalCreditUsedAmount
 		remainingPaidAmount := billPaymentAmount.Add(billAdvanceAmount).Add(billCreditAmount).Sub(paidBill.PaidAmount)
-		
+
 		if remainingPaidAmount.IsNegative() {
 			tx.Rollback()
 			return nil, errors.New("resulting BillTotalPaidAmount cannot be negative")

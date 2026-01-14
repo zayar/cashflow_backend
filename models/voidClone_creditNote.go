@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
-	"bitbucket.org/mmdatafocus/books_backend/utils"
+	"github.com/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/utils"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
@@ -151,4 +151,3 @@ func VoidAndCloneCreditNote(ctx context.Context, businessId string, creditNoteId
 	}
 	return &newCN, nil
 }
-

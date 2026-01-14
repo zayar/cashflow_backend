@@ -8,10 +8,10 @@ import (
 	"strconv"
 	"time"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
-	"bitbucket.org/mmdatafocus/books_backend/models"
-	"bitbucket.org/mmdatafocus/books_backend/utils"
 	"github.com/99designs/gqlgen/graphql"
+	"github.com/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/models"
+	"github.com/mmdatafocus/books_backend/utils"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"gorm.io/gorm"
 )

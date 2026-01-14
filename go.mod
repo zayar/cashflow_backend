@@ -1,4 +1,4 @@
-module bitbucket.org/mmdatafocus/books_backend
+module github.com/mmdatafocus/books_backend
 
 go 1.24.0
 

@@ -37,4 +37,3 @@ func UseStockCommandsFor(doc string) bool {
 	}
 	return false
 }
-

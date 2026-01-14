@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"bitbucket.org/mmdatafocus/books_backend/models"
+	"github.com/mmdatafocus/books_backend/models"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
@@ -64,20 +64,20 @@ func ReverseAccountJournal(tx *gorm.DB, original *models.AccountJournal, reason 
 	}
 
 	reversal := models.AccountJournal{
-		BusinessId:           original.BusinessId,
-		BranchId:             original.BranchId,
-		TransactionDateTime:  original.TransactionDateTime,
-		TransactionNumber:    "REV-" + original.TransactionNumber,
-		TransactionDetails:   "Reversal: " + reasonCopy,
-		ReferenceNumber:      original.ReferenceNumber,
-		CustomerId:           original.CustomerId,
-		SupplierId:           original.SupplierId,
-		ReferenceId:          original.ReferenceId,
-		ReferenceType:        original.ReferenceType,
-		IsReversal:           true,
-		ReversesJournalId:    &original.ID,
-		ReversalReason:       &reasonCopy,
-		AccountTransactions:  reversedTxs,
+		BusinessId:          original.BusinessId,
+		BranchId:            original.BranchId,
+		TransactionDateTime: original.TransactionDateTime,
+		TransactionNumber:   "REV-" + original.TransactionNumber,
+		TransactionDetails:  "Reversal: " + reasonCopy,
+		ReferenceNumber:     original.ReferenceNumber,
+		CustomerId:          original.CustomerId,
+		SupplierId:          original.SupplierId,
+		ReferenceId:         original.ReferenceId,
+		ReferenceType:       original.ReferenceType,
+		IsReversal:          true,
+		ReversesJournalId:   &original.ID,
+		ReversalReason:      &reasonCopy,
+		AccountTransactions: reversedTxs,
 	}
 
 	if err := tx.Create(&reversal).Error; err != nil {
@@ -97,4 +97,3 @@ func ReverseAccountJournal(tx *gorm.DB, original *models.AccountJournal, reason 
 
 	return reversal.ID, nil
 }
-

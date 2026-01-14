@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"bitbucket.org/mmdatafocus/books_backend/models"
-	"bitbucket.org/mmdatafocus/books_backend/utils"
+	"github.com/mmdatafocus/books_backend/models"
+	"github.com/mmdatafocus/books_backend/utils"
 	"gorm.io/gorm"
 )
 
@@ -48,21 +48,21 @@ func ReverseStockHistories(tx *gorm.DB, originals []*models.StockHistory, reason
 		}
 
 		rev := &models.StockHistory{
-			BusinessId:        o.BusinessId,
-			WarehouseId:       o.WarehouseId,
-			ProductId:         o.ProductId,
-			ProductType:       o.ProductType,
-			BatchNumber:       o.BatchNumber,
-			StockDate:         o.StockDate,
-			Qty:               reversalQty,
-			Description:       "REV: " + o.Description,
-			BaseUnitValue:     o.BaseUnitValue,
-			ReferenceType:     o.ReferenceType,
-			ReferenceID:       o.ReferenceID,
-			ReferenceDetailID: o.ReferenceDetailID,
-			IsOutgoing:        isOutgoingPtr,
-			IsTransferIn:      o.IsTransferIn,
-			IsReversal:        true,
+			BusinessId:             o.BusinessId,
+			WarehouseId:            o.WarehouseId,
+			ProductId:              o.ProductId,
+			ProductType:            o.ProductType,
+			BatchNumber:            o.BatchNumber,
+			StockDate:              o.StockDate,
+			Qty:                    reversalQty,
+			Description:            "REV: " + o.Description,
+			BaseUnitValue:          o.BaseUnitValue,
+			ReferenceType:          o.ReferenceType,
+			ReferenceID:            o.ReferenceID,
+			ReferenceDetailID:      o.ReferenceDetailID,
+			IsOutgoing:             isOutgoingPtr,
+			IsTransferIn:           o.IsTransferIn,
+			IsReversal:             true,
 			ReversesStockHistoryId: &o.ID,
 			ReversalReason:         &reasonCopy,
 		}
@@ -87,4 +87,3 @@ func ReverseStockHistories(tx *gorm.DB, originals []*models.StockHistory, reason
 
 	return reversals, nil
 }
-

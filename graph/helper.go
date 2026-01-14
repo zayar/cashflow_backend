@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"bitbucket.org/mmdatafocus/books_backend/middlewares"
-	"bitbucket.org/mmdatafocus/books_backend/models"
+	"github.com/mmdatafocus/books_backend/middlewares"
+	"github.com/mmdatafocus/books_backend/models"
 )
 
 func GetAllProduct(ctx context.Context, productId int, productType models.ProductType) (*models.AllProduct, error) {

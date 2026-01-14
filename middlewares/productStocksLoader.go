@@ -3,7 +3,7 @@ package middlewares
 import (
 // "context"
 
-// "bitbucket.org/mmdatafocus/books_backend/models"
+// "github.com/mmdatafocus/books_backend/models"
 // "github.com/graph-gophers/dataloader/v7"
 // "gorm.io/gorm"
 )

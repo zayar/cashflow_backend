@@ -33,4 +33,3 @@ type CogsAllocation struct {
 	CreatedAt     time.Time       `gorm:"autoCreateTime" json:"created_at"`
 	CorrelationId string          `gorm:"size:64;index" json:"correlation_id"`
 }
-

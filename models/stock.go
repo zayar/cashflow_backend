@@ -7,34 +7,34 @@ import (
 )
 
 type StockHistory struct {
-	ID                    int                `gorm:"primary_key" json:"id"`
-	BusinessId            string             `gorm:"index;not null" json:"business_id"`
-	WarehouseId           int                `gorm:"index;not null" json:"warehouse_id"`
-	ProductId             int                `gorm:"index;not null" json:"product_id"`
-	ProductType           ProductType        `gorm:"type:enum('S','G','C','V','I');default:S" json:"product_type"`
-	BatchNumber           string             `gorm:"size:100" json:"batch_number"`
-	StockDate             time.Time          `gorm:"not null" json:"stock_date"`
-	Qty                   decimal.Decimal    `gorm:"type:decimal(20,4);default:0" json:"qty"`
-	ClosingQty            decimal.Decimal    `gorm:"type:decimal(20,4);default:0" json:"closing_qty"`
-	Description           string             `gorm:"index;size:100;not null" json:"description"`
-	BaseUnitValue         decimal.Decimal    `gorm:"type:decimal(20,4);default:0" json:"base_unit_value"`
-	ClosingAssetValue     decimal.Decimal    `gorm:"type:decimal(20,4);default:0" json:"closing_asset_value"`
-	ReferenceType         StockReferenceType `gorm:"type:enum('IV','CN','BL','SC','IVAQ','IVAV','TO','POS','PGOS','PCOS')" json:"reference_type"`
-	ReferenceID           int                `json:"reference_id"`
-	ReferenceDetailID     int                `json:"reference_detail_id"`
-	IsOutgoing            *bool              `gorm:"not null;default:false" json:"is_outgoing"`
-	IsTransferIn          *bool              `gorm:"not null;default:false" json:"is_transfer_in"`
+	ID                int                `gorm:"primary_key" json:"id"`
+	BusinessId        string             `gorm:"index;not null" json:"business_id"`
+	WarehouseId       int                `gorm:"index;not null" json:"warehouse_id"`
+	ProductId         int                `gorm:"index;not null" json:"product_id"`
+	ProductType       ProductType        `gorm:"type:enum('S','G','C','V','I');default:S" json:"product_type"`
+	BatchNumber       string             `gorm:"size:100" json:"batch_number"`
+	StockDate         time.Time          `gorm:"not null" json:"stock_date"`
+	Qty               decimal.Decimal    `gorm:"type:decimal(20,4);default:0" json:"qty"`
+	ClosingQty        decimal.Decimal    `gorm:"type:decimal(20,4);default:0" json:"closing_qty"`
+	Description       string             `gorm:"index;size:100;not null" json:"description"`
+	BaseUnitValue     decimal.Decimal    `gorm:"type:decimal(20,4);default:0" json:"base_unit_value"`
+	ClosingAssetValue decimal.Decimal    `gorm:"type:decimal(20,4);default:0" json:"closing_asset_value"`
+	ReferenceType     StockReferenceType `gorm:"type:enum('IV','CN','BL','SC','IVAQ','IVAV','TO','POS','PGOS','PCOS')" json:"reference_type"`
+	ReferenceID       int                `json:"reference_id"`
+	ReferenceDetailID int                `json:"reference_detail_id"`
+	IsOutgoing        *bool              `gorm:"not null;default:false" json:"is_outgoing"`
+	IsTransferIn      *bool              `gorm:"not null;default:false" json:"is_transfer_in"`
 	// Phase 1: inventory ledger immutability & reversals (append-only)
-	IsReversal              bool       `gorm:"not null;default:false;index" json:"is_reversal"`
-	ReversesStockHistoryId  *int       `gorm:"index" json:"reverses_stock_history_id"`
-	ReversedByStockHistoryId *int      `gorm:"index" json:"reversed_by_stock_history_id"`
-	ReversalReason          *string    `gorm:"type:text" json:"reversal_reason"`
-	ReversedAt              *time.Time `gorm:"index" json:"reversed_at"`
-	CumulativeIncomingQty decimal.Decimal    `gorm:"type:decimal(20,4);default:0" json:"cumulative_incoming_qty"`
-	CumulativeOutgoingQty decimal.Decimal    `gorm:"type:decimal(20,4);default:0" json:"cumulative_outgoing_qty"`
-	CumulativeSequence    int                `gorm:"index;default:0" json:"cumulative_sequence"`
-	CreatedAt             time.Time          `gorm:"autoCreateTime" json:"created_at"`
-	UpdatedAt             time.Time          `gorm:"autoUpdateTime" json:"updated_at"`
+	IsReversal               bool            `gorm:"not null;default:false;index" json:"is_reversal"`
+	ReversesStockHistoryId   *int            `gorm:"index" json:"reverses_stock_history_id"`
+	ReversedByStockHistoryId *int            `gorm:"index" json:"reversed_by_stock_history_id"`
+	ReversalReason           *string         `gorm:"type:text" json:"reversal_reason"`
+	ReversedAt               *time.Time      `gorm:"index" json:"reversed_at"`
+	CumulativeIncomingQty    decimal.Decimal `gorm:"type:decimal(20,4);default:0" json:"cumulative_incoming_qty"`
+	CumulativeOutgoingQty    decimal.Decimal `gorm:"type:decimal(20,4);default:0" json:"cumulative_outgoing_qty"`
+	CumulativeSequence       int             `gorm:"index;default:0" json:"cumulative_sequence"`
+	CreatedAt                time.Time       `gorm:"autoCreateTime" json:"created_at"`
+	UpdatedAt                time.Time       `gorm:"autoUpdateTime" json:"updated_at"`
 }
 
 // type Stock struct {

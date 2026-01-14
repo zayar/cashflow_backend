@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
-	"bitbucket.org/mmdatafocus/books_backend/utils"
+	"github.com/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/utils"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
@@ -329,13 +329,15 @@ func DeleteCustomerPayment(ctx context.Context, id int) (*CustomerPayment, error
 		inv.RemainingBalance = inv.RemainingBalance.Add(paidInvoice.PaidAmount)
 
 		// Update the inv
-		if err := tx.WithContext(ctx).Save(&inv).Error; err != nil {
+		// inv is already a pointer (*SalesInvoice); do not pass **SalesInvoice to GORM.
+		if err := tx.WithContext(ctx).Save(inv).Error; err != nil {
 			tx.Rollback()
 			return nil, err
 		}
 	}
 
-	err = db.WithContext(ctx).Model(&result).Association("PaidInvoices").Unscoped().Clear()
+	// Ensure association cleanup participates in the same DB transaction.
+	err = tx.WithContext(ctx).Model(result).Association("PaidInvoices").Unscoped().Clear()
 	if err != nil {
 		tx.Rollback()
 		return nil, err

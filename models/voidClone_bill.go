@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
-	"bitbucket.org/mmdatafocus/books_backend/utils"
+	"github.com/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/utils"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
@@ -85,35 +85,35 @@ func VoidAndCloneBill(ctx context.Context, businessId string, billId int) (*Bill
 	}
 
 	newBill := Bill{
-		BusinessId:          oldBill.BusinessId,
-		SupplierId:          oldBill.SupplierId,
-		BranchId:            oldBill.BranchId,
-		PurchaseOrderId:     oldBill.PurchaseOrderId,
-		PurchaseOrderNumber: oldBill.PurchaseOrderNumber,
-		ReferenceNumber:     oldBill.ReferenceNumber,
-		BillDate:            oldBill.BillDate,
-		BillDueDate:         oldBill.BillDueDate,
-		BillPaymentTerms:    oldBill.BillPaymentTerms,
+		BusinessId:                 oldBill.BusinessId,
+		SupplierId:                 oldBill.SupplierId,
+		BranchId:                   oldBill.BranchId,
+		PurchaseOrderId:            oldBill.PurchaseOrderId,
+		PurchaseOrderNumber:        oldBill.PurchaseOrderNumber,
+		ReferenceNumber:            oldBill.ReferenceNumber,
+		BillDate:                   oldBill.BillDate,
+		BillDueDate:                oldBill.BillDueDate,
+		BillPaymentTerms:           oldBill.BillPaymentTerms,
 		BillPaymentTermsCustomDays: oldBill.BillPaymentTermsCustomDays,
-		BillSubject:         oldBill.BillSubject,
-		Notes:               oldBill.Notes,
-		CurrencyId:          oldBill.CurrencyId,
-		ExchangeRate:        oldBill.ExchangeRate,
-		WarehouseId:         oldBill.WarehouseId,
-		BillDiscount:        oldBill.BillDiscount,
-		BillDiscountType:    oldBill.BillDiscountType,
-		BillDiscountAmount:  oldBill.BillDiscountAmount,
-		AdjustmentAmount:    oldBill.AdjustmentAmount,
-		BillTaxId:           oldBill.BillTaxId,
-		BillTaxType:         oldBill.BillTaxType,
-		BillTaxAmount:       oldBill.BillTaxAmount,
-		IsTaxInclusive:      oldBill.IsTaxInclusive,
+		BillSubject:                oldBill.BillSubject,
+		Notes:                      oldBill.Notes,
+		CurrencyId:                 oldBill.CurrencyId,
+		ExchangeRate:               oldBill.ExchangeRate,
+		WarehouseId:                oldBill.WarehouseId,
+		BillDiscount:               oldBill.BillDiscount,
+		BillDiscountType:           oldBill.BillDiscountType,
+		BillDiscountAmount:         oldBill.BillDiscountAmount,
+		AdjustmentAmount:           oldBill.AdjustmentAmount,
+		BillTaxId:                  oldBill.BillTaxId,
+		BillTaxType:                oldBill.BillTaxType,
+		BillTaxAmount:              oldBill.BillTaxAmount,
+		IsTaxInclusive:             oldBill.IsTaxInclusive,
 
-		SequenceNo:     decimal.NewFromInt(seqNo),
-		BillNumber:     prefix + fmt.Sprint(seqNo),
-		CurrentStatus:  BillStatusDraft,
-		Details:        newDetails,
-		BillSubtotal:   oldBill.BillSubtotal,
+		SequenceNo:              decimal.NewFromInt(seqNo),
+		BillNumber:              prefix + fmt.Sprint(seqNo),
+		CurrentStatus:           BillStatusDraft,
+		Details:                 newDetails,
+		BillSubtotal:            oldBill.BillSubtotal,
 		BillTotalDiscountAmount: oldBill.BillTotalDiscountAmount,
 		BillTotalTaxAmount:      oldBill.BillTotalTaxAmount,
 		BillTotalAmount:         oldBill.BillTotalAmount,
@@ -183,4 +183,3 @@ func VoidAndCloneBill(ctx context.Context, businessId string, billId int) (*Bill
 	}
 	return &newBill, nil
 }
-

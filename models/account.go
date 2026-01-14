@@ -5,35 +5,35 @@ import (
 	"errors"
 	"time"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
-	"bitbucket.org/mmdatafocus/books_backend/utils"
 	"github.com/google/uuid"
+	"github.com/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/utils"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
 
 type Account struct {
-	ID                int               `gorm:"primary_key" json:"id"`
-	BusinessId        string            `gorm:"index;not null" json:"business_id"`
-	DetailType        AccountDetailType `gorm:"type:enum('OtherAsset', 'OtherCurrentAsset', 'Cash', 'Bank', 'FixedAsset', 'Stock', 'PaymentClearing', 'InputTax', 'OtherCurrentLiability', 'CreditCard', 'LongTermLiability', 'OtherLiability', 'OverseasTaxPayable', 'OutputTax', 'Equity', 'Income', 'OtherIncome', 'Expense', 'CostOfGoodsSold', 'OtherExpense','AccountsReceivable','AccountsPayable');default:'Expense';index;size:50;not null" json:"detailType" binding:"required"`
-	MainType          AccountMainType   `gorm:"type:enum('Asset', 'Liability', 'Equity', 'Income', 'Expense');default:'Expense';index;size:10;not null" json:"mainType" binding:"required"`
+	ID         int               `gorm:"primary_key" json:"id"`
+	BusinessId string            `gorm:"index;not null" json:"business_id"`
+	DetailType AccountDetailType `gorm:"type:enum('OtherAsset', 'OtherCurrentAsset', 'Cash', 'Bank', 'FixedAsset', 'Stock', 'PaymentClearing', 'InputTax', 'OtherCurrentLiability', 'CreditCard', 'LongTermLiability', 'OtherLiability', 'OverseasTaxPayable', 'OutputTax', 'Equity', 'Income', 'OtherIncome', 'Expense', 'CostOfGoodsSold', 'OtherExpense','AccountsReceivable','AccountsPayable');default:'Expense';index;size:50;not null" json:"detailType" binding:"required"`
+	MainType   AccountMainType   `gorm:"type:enum('Asset', 'Liability', 'Equity', 'Income', 'Expense');default:'Expense';index;size:10;not null" json:"mainType" binding:"required"`
 	// Reporting & cashflow classification (Phase A)
 	// Stored on the account to make reports stable and avoid code heuristics.
-	NormalBalance    NormalBalance     `gorm:"size:16;not null;default:'DEBIT';index" json:"normal_balance"`
-	ReportGroup      AccountReportGroup `gorm:"size:64;index" json:"report_group"`
-	CashflowActivity CashflowActivity  `gorm:"size:16;index" json:"cashflow_activity"`
-	Name              string            `gorm:"index;size:100;not null" json:"name" binding:"required"`
-	AccountNumber     string            `gorm:"index;size:100" json:"account_number" binding:"required"`
-	CurrencyId        int               `gorm:"index;size:100" json:"currency_id"`
-	Branches          string            `gorm:"type:string" json:"branches"`
-	Code              string            `gorm:"size:100" json:"code"`
-	Description       string            `gorm:"type:text" json:"description"`
-	ParentAccountId   int               `gorm:"index;not null" json:"parentAccountId"`
-	IsActive          *bool             `gorm:"not null;default:true" json:"is_active"`
-	IsSystemDefault   *bool             `gorm:"not null;default:false" json:"is_system_default"`
-	SystemDefaultCode string            `gorm:"index;size:3" json:"system_default_code"`
-	CreatedAt         time.Time         `gorm:"autoCreateTime" json:"created_at"`
-	UpdatedAt         time.Time         `gorm:"autoUpdateTime" json:"updated_at"`
+	NormalBalance     NormalBalance      `gorm:"size:16;not null;default:'DEBIT';index" json:"normal_balance"`
+	ReportGroup       AccountReportGroup `gorm:"size:64;index" json:"report_group"`
+	CashflowActivity  CashflowActivity   `gorm:"size:16;index" json:"cashflow_activity"`
+	Name              string             `gorm:"index;size:100;not null" json:"name" binding:"required"`
+	AccountNumber     string             `gorm:"index;size:100" json:"account_number" binding:"required"`
+	CurrencyId        int                `gorm:"index;size:100" json:"currency_id"`
+	Branches          string             `gorm:"type:string" json:"branches"`
+	Code              string             `gorm:"size:100" json:"code"`
+	Description       string             `gorm:"type:text" json:"description"`
+	ParentAccountId   int                `gorm:"index;not null" json:"parentAccountId"`
+	IsActive          *bool              `gorm:"not null;default:true" json:"is_active"`
+	IsSystemDefault   *bool              `gorm:"not null;default:false" json:"is_system_default"`
+	SystemDefaultCode string             `gorm:"index;size:3" json:"system_default_code"`
+	CreatedAt         time.Time          `gorm:"autoCreateTime" json:"created_at"`
+	UpdatedAt         time.Time          `gorm:"autoUpdateTime" json:"updated_at"`
 }
 
 type NewAccount struct {

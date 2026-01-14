@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
-	"bitbucket.org/mmdatafocus/books_backend/utils"
+	"github.com/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/utils"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
@@ -100,11 +100,11 @@ func CancelAndClonePurchaseOrder(ctx context.Context, businessId string, purchas
 		IsTaxInclusive:              oldPO.IsTaxInclusive,
 		WarehouseId:                 oldPO.WarehouseId,
 
-		SequenceNo:     decimal.NewFromInt(seqNo),
-		OrderNumber:    prefix + fmt.Sprint(seqNo),
-		CurrentStatus:  PurchaseOrderStatusDraft,
-		Details:        newDetails,
-		OrderSubtotal:  oldPO.OrderSubtotal,
+		SequenceNo:               decimal.NewFromInt(seqNo),
+		OrderNumber:              prefix + fmt.Sprint(seqNo),
+		CurrentStatus:            PurchaseOrderStatusDraft,
+		Details:                  newDetails,
+		OrderSubtotal:            oldPO.OrderSubtotal,
 		OrderTotalDiscountAmount: oldPO.OrderTotalDiscountAmount,
 		OrderTotalTaxAmount:      oldPO.OrderTotalTaxAmount,
 		OrderTotalAmount:         oldPO.OrderTotalAmount,
@@ -143,4 +143,3 @@ func CancelAndClonePurchaseOrder(ctx context.Context, businessId string, purchas
 	}
 	return &newPO, nil
 }
-

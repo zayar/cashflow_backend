@@ -4,8 +4,8 @@ import (
 	"errors"
 	"time"
 
-	"bitbucket.org/mmdatafocus/books_backend/models"
 	mysqlDriver "github.com/go-sql-driver/mysql"
+	"github.com/mmdatafocus/books_backend/models"
 	"gorm.io/gorm"
 )
 
@@ -77,4 +77,3 @@ func MarkIdempotencyFailed(tx *gorm.DB, businessId, handlerName, messageId strin
 		Where("business_id = ? AND handler_name = ? AND message_id = ?", businessId, handlerName, messageId).
 		Updates(map[string]interface{}{"status": models.IdempotencyStatusFailed, "last_error": &msg}).Error
 }
-

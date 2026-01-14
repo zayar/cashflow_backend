@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
-	"bitbucket.org/mmdatafocus/books_backend/utils"
 	"github.com/99designs/gqlgen/graphql"
+	"github.com/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/utils"
 )
 
 type NewAttachment struct {

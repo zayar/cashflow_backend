@@ -3,7 +3,7 @@ package models
 import (
 	"context"
 
-	"bitbucket.org/mmdatafocus/books_backend/utils"
+	"github.com/mmdatafocus/books_backend/utils"
 	"gorm.io/gorm"
 )
 

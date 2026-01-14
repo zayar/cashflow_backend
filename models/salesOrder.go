@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
-	"bitbucket.org/mmdatafocus/books_backend/utils"
+	"github.com/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/utils"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
@@ -724,7 +724,7 @@ func UpdateStatusSalesOrder(ctx context.Context, id int, status string) (*SalesO
 		return nil, errors.New("cannot update sale order that is already closed")
 	}
 
-	if so.CurrentStatus == SalesOrderStatusPartiallyInvoiced && status == string(SalesOrderStatusCancelled){
+	if so.CurrentStatus == SalesOrderStatusPartiallyInvoiced && status == string(SalesOrderStatusCancelled) {
 		return nil, errors.New("sale orders that are converted to invoice cannot be cancelled.")
 	}
 
@@ -879,7 +879,7 @@ func PaginateSalesOrder(ctx context.Context, limit *int, after *string,
 	return &salesOrdersConnection, err
 }
 
-func UpdateSaleOrderDetailInvoicedQty(tx *gorm.DB, ctx context.Context, saleOrderId int, invoiceItem SalesInvoiceDetail, action string, oldQty decimal.Decimal,inventoryAccId int) error {
+func UpdateSaleOrderDetailInvoicedQty(tx *gorm.DB, ctx context.Context, saleOrderId int, invoiceItem SalesInvoiceDetail, action string, oldQty decimal.Decimal, inventoryAccId int) error {
 	var saleOrderDetail SalesOrderDetail
 	var err error
 	if invoiceItem.SalesOrderItemId > 0 {
@@ -915,11 +915,10 @@ func UpdateSaleOrderDetailInvoicedQty(tx *gorm.DB, ctx context.Context, saleOrde
 
 		if inventoryAccId > 0 {
 			if err := UpdateStockSummaryCommittedQty(tx, so.BusinessId, so.WarehouseId, invoiceItem.ProductId, string(invoiceItem.ProductType), invoiceItem.BatchNumber, invoiceItem.DetailQty.Neg(), so.OrderDate); err != nil {
-			tx.Rollback()
-			return err
+				tx.Rollback()
+				return err
+			}
 		}
-		}
-
 
 	} else if action == "update" {
 
@@ -950,7 +949,7 @@ func UpdateSaleOrderDetailInvoicedQty(tx *gorm.DB, ctx context.Context, saleOrde
 	return nil
 }
 
-func ChangeSaleOrderCurrentStatus(tx *gorm.DB,ctx context.Context, businessId string, soId int) (*SalesOrder, error) {
+func ChangeSaleOrderCurrentStatus(tx *gorm.DB, ctx context.Context, businessId string, soId int) (*SalesOrder, error) {
 
 	var saleOrder SalesOrder
 	err := tx.Preload("Details").Where("business_id = ? AND id = ?", businessId, soId).First(&saleOrder).Error

@@ -3,11 +3,14 @@ package models
 import (
 	"context"
 	"errors"
+	"os"
+	"strings"
 	"time"
 
-	"bitbucket.org/mmdatafocus/books_backend/config"
-	"bitbucket.org/mmdatafocus/books_backend/utils"
+	"github.com/mmdatafocus/books_backend/config"
+	"github.com/mmdatafocus/books_backend/utils"
 	"github.com/shopspring/decimal"
+	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 )
 
@@ -113,6 +116,8 @@ func CreateTransferOrder(ctx context.Context, input *NewTransferOrder) (*Transfe
 	if !ok || businessId == "" {
 		return nil, errors.New("business id is required")
 	}
+	logger := config.GetLogger()
+	debug := strings.EqualFold(strings.TrimSpace(os.Getenv("DEBUG_TRANSFER_ORDER")), "true")
 	// validate TransferOrder
 	if err := input.validate(ctx, businessId, 0); err != nil {
 		return nil, err
@@ -160,10 +165,31 @@ func CreateTransferOrder(ctx context.Context, input *NewTransferOrder) (*Transfe
 		Details:                transferItems,
 	}
 
+	if debug {
+		logger.WithFields(logrus.Fields{
+			"field":                    "CreateTransferOrder",
+			"business_id":              businessId,
+			"order_number":             transferOrder.OrderNumber,
+			"transfer_date":            transferOrder.TransferDate,
+			"requested_status":         input.CurrentStatus,
+			"source_warehouse_id":      transferOrder.SourceWarehouseId,
+			"destination_warehouse_id": transferOrder.DestinationWarehouseId,
+			"details_count":            len(transferOrder.Details),
+		}).Info("begin transfer order create")
+	}
+
 	tx := db.Begin()
 
 	err = tx.WithContext(ctx).Create(&transferOrder).Error
 	if err != nil {
+		if debug {
+			logger.WithFields(logrus.Fields{
+				"field":       "CreateTransferOrder",
+				"business_id": businessId,
+				"stage":       "create",
+				"error":       err.Error(),
+			}).Error("transfer order create failed; rollback")
+		}
 		tx.Rollback()
 		return nil, err
 	}
@@ -171,22 +197,73 @@ func CreateTransferOrder(ctx context.Context, input *NewTransferOrder) (*Transfe
 	// If requested "Confirmed", apply the status transition deterministically (Draft -> Confirmed).
 	requestedStatus := input.CurrentStatus
 	if requestedStatus == TransferOrderStatusConfirmed {
+		if debug {
+			logger.WithFields(logrus.Fields{
+				"field":             "CreateTransferOrder",
+				"business_id":       businessId,
+				"transfer_order_id": transferOrder.ID,
+				"stage":             "status_transition",
+				"from_status":       TransferOrderStatusDraft,
+				"to_status":         TransferOrderStatusConfirmed,
+			}).Info("applying transfer order status transition")
+		}
 		if err := tx.WithContext(ctx).Model(&transferOrder).Update("CurrentStatus", TransferOrderStatusConfirmed).Error; err != nil {
+			if debug {
+				logger.WithFields(logrus.Fields{
+					"field":             "CreateTransferOrder",
+					"business_id":       businessId,
+					"transfer_order_id": transferOrder.ID,
+					"stage":             "status_update",
+					"error":             err.Error(),
+				}).Error("transfer order status update failed; rollback")
+			}
 			tx.Rollback()
 			return nil, err
 		}
 		transferOrder.CurrentStatus = TransferOrderStatusConfirmed
 
 		// Apply inventory side-effects deterministically.
-		if config.UseStockCommandsFor("TRANSFER_ORDER") {
-			if err := ApplyTransferOrderStockForStatusTransition(tx.WithContext(ctx), &transferOrder, TransferOrderStatusDraft); err != nil {
-				tx.Rollback()
-				return nil, err
+		//
+		// IMPORTANT:
+		// This must run regardless of STOCK_COMMANDS_DOCS flag.
+		// TransferOrder is created as Draft then transitioned to Confirmed via Update(),
+		// which does NOT trigger the legacy model-hook stock updates (AfterUpdateCurrentStatus).
+		// If we only run this when stock commands are enabled, confirmed transfers will post accounting
+		// but never update stock_summary_daily_balances, causing warehouse reports to remain unchanged.
+		if debug {
+			logger.WithFields(logrus.Fields{
+				"field":                  "CreateTransferOrder",
+				"business_id":            businessId,
+				"transfer_order_id":      transferOrder.ID,
+				"stage":                  "apply_stock",
+				"stock_commands_enabled": config.UseStockCommandsFor("TRANSFER_ORDER"),
+			}).Info("applying transfer order stock side-effects")
+		}
+		if err := ApplyTransferOrderStockForStatusTransition(tx.WithContext(ctx), &transferOrder, TransferOrderStatusDraft); err != nil {
+			if debug {
+				logger.WithFields(logrus.Fields{
+					"field":             "CreateTransferOrder",
+					"business_id":       businessId,
+					"transfer_order_id": transferOrder.ID,
+					"stage":             "apply_stock",
+					"error":             err.Error(),
+				}).Error("transfer order stock side-effects failed; rollback")
 			}
+			tx.Rollback()
+			return nil, err
 		}
 
 		// Write outbox record only when confirmed.
 		if err := PublishToAccounting(ctx, tx, businessId, transferOrder.TransferDate, transferOrder.ID, AccountReferenceTypeTransferOrder, transferOrder, nil, PubSubMessageActionCreate); err != nil {
+			if debug {
+				logger.WithFields(logrus.Fields{
+					"field":             "CreateTransferOrder",
+					"business_id":       businessId,
+					"transfer_order_id": transferOrder.ID,
+					"stage":             "outbox",
+					"error":             err.Error(),
+				}).Error("transfer order outbox write failed; rollback")
+			}
 			tx.Rollback()
 			return nil, err
 		}
@@ -196,6 +273,15 @@ func CreateTransferOrder(ctx context.Context, input *NewTransferOrder) (*Transfe
 
 	if err := tx.Commit().Error; err != nil {
 		return nil, err
+	}
+
+	if debug {
+		logger.WithFields(logrus.Fields{
+			"field":             "CreateTransferOrder",
+			"business_id":       businessId,
+			"transfer_order_id": transferOrder.ID,
+			"status":            transferOrder.CurrentStatus,
+		}).Info("transfer order committed")
 	}
 
 	return &transferOrder, nil
