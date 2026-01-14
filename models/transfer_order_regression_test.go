@@ -770,20 +770,20 @@ func TestInventoryValuationSummaryReport_IgnoresReversalRows(t *testing.T) {
 	tx := db.Begin()
 
 	opening := &models.StockHistory{
-		BusinessId:     businessID,
-		WarehouseId:    primary.ID,
-		ProductId:      banana.ID,
-		ProductType:    models.ProductTypeSingle,
-		BatchNumber:    "",
-		StockDate:      stockDate,
-		Qty:            decimal.NewFromInt(20),
-		BaseUnitValue:  decimal.NewFromInt(50),
-		Description:    "Opening Stock",
-		ReferenceType:  models.StockReferenceTypeProductOpeningStock,
-		ReferenceID:    banana.ID,
-		IsOutgoing:     utils.NewFalse(),
-		IsTransferIn:   utils.NewFalse(),
-		IsReversal:     false,
+		BusinessId:    businessID,
+		WarehouseId:   primary.ID,
+		ProductId:     banana.ID,
+		ProductType:   models.ProductTypeSingle,
+		BatchNumber:   "",
+		StockDate:     stockDate,
+		Qty:           decimal.NewFromInt(20),
+		BaseUnitValue: decimal.NewFromInt(50),
+		Description:   "Opening Stock",
+		ReferenceType: models.StockReferenceTypeProductOpeningStock,
+		ReferenceID:   banana.ID,
+		IsOutgoing:    utils.NewFalse(),
+		IsTransferIn:  utils.NewFalse(),
+		IsReversal:    false,
 	}
 	if err := tx.WithContext(ctx).Create(opening).Error; err != nil {
 		tx.Rollback()
@@ -791,21 +791,21 @@ func TestInventoryValuationSummaryReport_IgnoresReversalRows(t *testing.T) {
 	}
 
 	origOut := &models.StockHistory{
-		BusinessId:     businessID,
-		WarehouseId:    primary.ID,
-		ProductId:      banana.ID,
-		ProductType:    models.ProductTypeSingle,
-		BatchNumber:    "",
-		StockDate:      stockDate.AddDate(0, 0, 14), // 14 Jan 2026 (date-only semantics)
-		Qty:            decimal.NewFromInt(-2),
-		BaseUnitValue:  decimal.NewFromInt(50),
-		Description:    "Invoice",
-		ReferenceType:  models.StockReferenceTypeInvoice,
-		ReferenceID:    12,
+		BusinessId:        businessID,
+		WarehouseId:       primary.ID,
+		ProductId:         banana.ID,
+		ProductType:       models.ProductTypeSingle,
+		BatchNumber:       "",
+		StockDate:         stockDate.AddDate(0, 0, 14), // 14 Jan 2026 (date-only semantics)
+		Qty:               decimal.NewFromInt(-2),
+		BaseUnitValue:     decimal.NewFromInt(50),
+		Description:       "Invoice",
+		ReferenceType:     models.StockReferenceTypeInvoice,
+		ReferenceID:       12,
 		ReferenceDetailID: 12,
-		IsOutgoing:     utils.NewTrue(),
-		IsTransferIn:   utils.NewFalse(),
-		IsReversal:     false,
+		IsOutgoing:        utils.NewTrue(),
+		IsTransferIn:      utils.NewFalse(),
+		IsReversal:        false,
 	}
 	if err := tx.WithContext(ctx).Create(origOut).Error; err != nil {
 		tx.Rollback()
@@ -842,21 +842,21 @@ func TestInventoryValuationSummaryReport_IgnoresReversalRows(t *testing.T) {
 
 	// Replacement row that should be the only "active" outgoing row.
 	replOut := &models.StockHistory{
-		BusinessId:     businessID,
-		WarehouseId:    primary.ID,
-		ProductId:      banana.ID,
-		ProductType:    models.ProductTypeSingle,
-		BatchNumber:    "",
-		StockDate:      origOut.StockDate,
-		Qty:            decimal.NewFromInt(-2),
-		BaseUnitValue:  decimal.NewFromInt(50),
-		Description:    "Invoice",
-		ReferenceType:  models.StockReferenceTypeInvoice,
-		ReferenceID:    12,
+		BusinessId:        businessID,
+		WarehouseId:       primary.ID,
+		ProductId:         banana.ID,
+		ProductType:       models.ProductTypeSingle,
+		BatchNumber:       "",
+		StockDate:         origOut.StockDate,
+		Qty:               decimal.NewFromInt(-2),
+		BaseUnitValue:     decimal.NewFromInt(50),
+		Description:       "Invoice",
+		ReferenceType:     models.StockReferenceTypeInvoice,
+		ReferenceID:       12,
 		ReferenceDetailID: 12,
-		IsOutgoing:     utils.NewTrue(),
-		IsTransferIn:   utils.NewFalse(),
-		IsReversal:     false,
+		IsOutgoing:        utils.NewTrue(),
+		IsTransferIn:      utils.NewFalse(),
+		IsReversal:        false,
 	}
 	if err := tx.WithContext(ctx).Create(replOut).Error; err != nil {
 		tx.Rollback()

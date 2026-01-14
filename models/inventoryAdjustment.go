@@ -506,8 +506,13 @@ func DeleteInventoryAdjustment(ctx context.Context, id int) (*InventoryAdjustmen
 	db := config.GetDB()
 	tx := db.Begin()
 
-	// reduced received qty from stock summary if bill is confirmed
-	if result.CurrentStatus == InventoryAdjustmentStatusAdjusted && result.AdjustmentType == InventoryAdjustmentTypeQuantity {
+	// Keep cache tables consistent with the chosen processing mode:
+	// - When stock commands are enabled for INVENTORY_ADJUSTMENT, we apply stock_summaries updates synchronously.
+	// - When disabled, inventory availability is reconciled via async stock ledger workflows (and their cache updates),
+	//   so we must NOT mutate stock_summaries here (to avoid double-counting and mismatches).
+	if config.UseStockCommandsFor("INVENTORY_ADJUSTMENT") &&
+		result.CurrentStatus == InventoryAdjustmentStatusAdjusted &&
+		result.AdjustmentType == InventoryAdjustmentTypeQuantity {
 		for _, detailItem := range result.Details {
 			if detailItem.ProductId > 0 {
 				product, err := GetProductOrVariant(ctx, string(detailItem.ProductType), detailItem.ProductId)

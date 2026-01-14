@@ -13,6 +13,89 @@ import (
 	"gorm.io/gorm"
 )
 
+// applyInventoryAdjustmentQuantityToStockSummary updates stock_summaries + stock_summary_daily_balances
+// from the stock ledger rows created by the inventory adjustment workflow.
+//
+// Why this exists:
+// - Inventory valuation is driven by stock_histories (ledger).
+// - Product Overview / Transfer Order availability / Warehouse Report are driven by stock_summaries
+//   and stock_summary_daily_balances (cache/derived tables).
+// - When INVENTORY_ADJUSTMENT stock commands are disabled, creating an adjustment as "Adjusted"
+//   can post to the ledger (async) without updating the cache, causing UI mismatch.
+//
+// IMPORTANT: Avoid double-applying when INVENTORY_ADJUSTMENT stock commands are enabled
+// (those update stock_summaries at status transition time).
+func applyInventoryAdjustmentQuantityToStockSummary(tx *gorm.DB, businessId string, stockHistories []*models.StockHistory) error {
+	if tx == nil {
+		return gorm.ErrInvalidDB
+	}
+	if len(stockHistories) == 0 {
+		return nil
+	}
+	// If stock commands are enabled for inventory adjustments, cache updates are already applied
+	// during the Draft -> Adjusted transition in the API layer.
+	if config.UseStockCommandsFor("INVENTORY_ADJUSTMENT") {
+		return nil
+	}
+
+	ctx := tx.Statement.Context
+	if err := utils.BusinessLock(ctx, businessId, "stockLock", "inventoryAdjustmentQuantityWorkflow.go", "applyInventoryAdjustmentQuantityToStockSummary"); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	for _, sh := range stockHistories {
+		if sh == nil {
+			continue
+		}
+		if sh.ProductId <= 0 {
+			continue
+		}
+		if sh.ReferenceType != models.StockReferenceTypeInventoryAdjustmentQuantity {
+			// Defensive: this helper is only intended for IVAQ rows.
+			continue
+		}
+
+		// NOTE: worker tx context does not always carry business_id, so do NOT use
+		// context-scoped product fetches here. Use the workflow helper instead.
+		productDetail, err := GetProductDetail(tx, sh.ProductId, sh.ProductType)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+		if productDetail.InventoryAccountId <= 0 {
+			continue
+		}
+
+		isOutgoing := false
+		if sh.IsOutgoing != nil {
+			isOutgoing = *sh.IsOutgoing
+		}
+
+		// For reversals, we want to reverse the same "bucket" the original affected:
+		// - original incoming adjustment -> decrement adjusted_qty_in (pass negative qty to AdjustedQtyIn)
+		// - original outgoing adjustment -> decrement adjusted_qty_out (pass positive qty to AdjustedQtyOut)
+		applyToOutBucket := isOutgoing
+		if sh.IsReversal {
+			originalWasOutgoing := !isOutgoing
+			applyToOutBucket = originalWasOutgoing
+		}
+
+		if applyToOutBucket {
+			if err := models.UpdateStockSummaryAdjustedQtyOut(tx, sh.BusinessId, sh.WarehouseId, sh.ProductId, string(sh.ProductType), sh.BatchNumber, sh.Qty, sh.StockDate); err != nil {
+				tx.Rollback()
+				return err
+			}
+		} else {
+			if err := models.UpdateStockSummaryAdjustedQtyIn(tx, sh.BusinessId, sh.WarehouseId, sh.ProductId, string(sh.ProductType), sh.BatchNumber, sh.Qty, sh.StockDate); err != nil {
+				tx.Rollback()
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func ProcessInventoryAdjustmentQuantityWorkflow(tx *gorm.DB, logger *logrus.Logger, msg config.PubSubMessage) error {
 
 	var accountJournalId int
@@ -39,6 +122,11 @@ func ProcessInventoryAdjustmentQuantityWorkflow(tx *gorm.DB, logger *logrus.Logg
 			return err
 		}
 		merged := append(increasedStockHistories, decreasedStockHistories...)
+		// Keep cache tables in sync with ledger for UI stock availability queries.
+		if err := applyInventoryAdjustmentQuantityToStockSummary(tx, msg.BusinessId, merged); err != nil {
+			config.LogError(logger, "InventoryAdjustmentQuantityWorkflow.go", "ProcessInventoryAdjustmentQuantityWorkflow > Create", "applyInventoryAdjustmentQuantityToStockSummary", merged, err)
+			return err
+		}
 		valuationAccountIds, err := ProcessStockHistories(tx, logger, merged)
 		if err != nil {
 			config.LogError(logger, "InventoryAdjustmentQuantityWorkflow.go", "ProcessInventoryAdjustmentQuantityWorkflow > Create", "ProcessStockHistories", merged, err)
@@ -63,6 +151,11 @@ func ProcessInventoryAdjustmentQuantityWorkflow(tx *gorm.DB, logger *logrus.Logg
 			return err
 		}
 		merged := append(increasedStockHistories, decreasedStockHistories...)
+		// Apply reversal effects to cache tables as well, so availability reverts.
+		if err := applyInventoryAdjustmentQuantityToStockSummary(tx, msg.BusinessId, merged); err != nil {
+			config.LogError(logger, "InventoryAdjustmentQuantityWorkflow.go", "ProcessInventoryAdjustmentQuantityWorkflow > Delete", "applyInventoryAdjustmentQuantityToStockSummary", merged, err)
+			return err
+		}
 		valuationAccountIds, err := ProcessStockHistories(tx, logger, merged)
 		if err != nil {
 			config.LogError(logger, "InventoryAdjustmentQuantityWorkflow.go", "ProcessInventoryAdjustmentQuantityWorkflow > Delete", "ProcessStockHistories", merged, err)
