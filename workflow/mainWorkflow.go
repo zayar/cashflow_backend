@@ -407,13 +407,26 @@ func GetRemainingStockHistoriesByCumulativeQty(tx *gorm.DB, warehouseId int, pro
 			ORDER BY stock_date, is_outgoing, id ASC;
 			`, warehouseId, warehouseId, productId, productType, batchNumber, qty).Find(&remaininigStockHistories).Error
 	} else {
-		err = tx.Raw(`
-			SELECT * FROM stock_histories
-			WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
-				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND is_outgoing = false AND cumulative_incoming_qty > ?
-				AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
-			ORDER BY stock_date, is_outgoing, id ASC;
-			`, warehouseId, warehouseId, productId, productType, batchNumber, qty).Find(&remaininigStockHistories).Error
+		// For incoming stock histories, if qty is 0 (no outgoing stock yet), we need to include ALL incoming stock
+		// including opening stock which might have cumulative_incoming_qty = 0 if it's the first entry.
+		// Use >= 0 when qty is 0 to ensure opening stock is found.
+		if qty.IsZero() {
+			err = tx.Raw(`
+				SELECT * FROM stock_histories
+				WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
+					AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND is_outgoing = false AND cumulative_incoming_qty >= ?
+					AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
+				ORDER BY stock_date, is_outgoing, id ASC;
+				`, warehouseId, warehouseId, productId, productType, batchNumber, qty).Find(&remaininigStockHistories).Error
+		} else {
+			err = tx.Raw(`
+				SELECT * FROM stock_histories
+				WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
+					AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND is_outgoing = false AND cumulative_incoming_qty > ?
+					AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
+				ORDER BY stock_date, is_outgoing, id ASC;
+				`, warehouseId, warehouseId, productId, productType, batchNumber, qty).Find(&remaininigStockHistories).Error
+		}
 	}
 
 	return remaininigStockHistories, err
@@ -493,12 +506,75 @@ func calculateCogs(tx *gorm.DB, logger *logrus.Logger, productDetail ProductDeta
 	existingStocks := make(map[string]StockHistoryFragment)
 	existingStockDetails := make(map[string]StockHistoryDetailFragment)
 
+	// Query existing stock histories for this reference directly from DB to ensure we compare
+	// against the correct baseline (stock histories created by previous calculateCogs runs
+	// for THIS invoice/reference), not stock histories from other transactions.
+	// This prevents COGS miscalculation when outgoingStockHistories includes rows from
+	// other invoices for the same product.
+	if len(outgoingStockHistories) > 0 {
+		var existingRefStockHistories []*models.StockHistory
+		firstOutStock := outgoingStockHistories[0]
+		err = tx.
+			Where("business_id = ? AND reference_type = ? AND reference_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND is_outgoing = 1 AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
+				firstOutStock.BusinessId, updatedReferenceType, updatedReferenceId, firstOutStock.WarehouseId, firstOutStock.ProductId, firstOutStock.ProductType, firstOutStock.BatchNumber).
+			Find(&existingRefStockHistories).Error
+		if err != nil {
+			config.LogError(logger, "MainWorkflow.go", "CalculateCogs", "QueryExistingRefStockHistories", updatedReferenceId, err)
+			return accountIds, err
+		}
+		for _, refStock := range existingRefStockHistories {
+			key := fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d", refStock.WarehouseId, refStock.ProductId, refStock.ProductType, refStock.BatchNumber, refStock.ReferenceID, refStock.ReferenceType, refStock.ReferenceDetailID)
+			if existing, found := existingStocks[key]; found {
+				existing.TotalQty = existing.TotalQty.Add(refStock.Qty.Abs())
+				existing.TotalValue = existing.TotalValue.Add(refStock.Qty.Abs().Mul(refStock.BaseUnitValue))
+				existingStocks[key] = existing
+			} else {
+				existingStocks[key] = StockHistoryFragment{
+					BusinessId:        refStock.BusinessId,
+					WarehouseId:       refStock.WarehouseId,
+					ProductId:         refStock.ProductId,
+					ProductType:       refStock.ProductType,
+					BatchNumber:       refStock.BatchNumber,
+					ReferenceId:       refStock.ReferenceID,
+					ReferenceType:     refStock.ReferenceType,
+					ReferenceDetailId: refStock.ReferenceDetailID,
+					TotalQty:          refStock.Qty.Abs(),
+					TotalValue:        refStock.Qty.Abs().Mul(refStock.BaseUnitValue),
+				}
+			}
+			detailKey := fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d-%s", refStock.WarehouseId, refStock.ProductId, refStock.ProductType, refStock.BatchNumber, refStock.ReferenceID, refStock.ReferenceType, refStock.ReferenceDetailID, refStock.BaseUnitValue)
+			if existing, found := existingStockDetails[detailKey]; found {
+				existing.Qty = existing.Qty.Add(refStock.Qty.Abs())
+				existingStockDetails[detailKey] = existing
+			} else {
+				existingStockDetails[detailKey] = StockHistoryDetailFragment{
+					Id:                refStock.ID,
+					BusinessId:        refStock.BusinessId,
+					WarehouseId:       refStock.WarehouseId,
+					ProductId:         refStock.ProductId,
+					ProductType:       refStock.ProductType,
+					BatchNumber:       refStock.BatchNumber,
+					StockDate:         refStock.StockDate,
+					Description:       refStock.Description,
+					ReferenceId:       refStock.ReferenceID,
+					ReferenceType:     refStock.ReferenceType,
+					ReferenceDetailId: refStock.ReferenceDetailID,
+					Qty:               refStock.Qty.Abs(),
+					BaseUnitValue:     refStock.BaseUnitValue,
+				}
+			}
+		}
+	}
+
 	processQty := outgoingStockHistories[0].Qty.Abs()
 	if !startProcessQty.IsZero() {
 		processQty = startProcessQty
 	}
 
 	for outIndex, outStock := range outgoingStockHistories {
+		// Process ALL outgoingStockHistories in the FIFO loop below for correct inventory
+		// consumption tracking. The existingStocks map was already populated from DB query
+		// above, so we don't need to build it from outgoingStockHistories here.
 		if outIndex == 0 && !processQty.Equal(outgoingStockHistories[0].Qty.Abs()) {
 			uniqueStocks[fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d", outStock.WarehouseId, outStock.ProductId, outStock.ProductType, outStock.BatchNumber, outStock.ReferenceID, outStock.ReferenceType, outStock.ReferenceDetailID)] = StockHistoryFragment{
 				BusinessId:        outStock.BusinessId,
@@ -524,44 +600,6 @@ func calculateCogs(tx *gorm.DB, logger *logrus.Logger, productDetail ProductDeta
 				ReferenceType:     outStock.ReferenceType,
 				ReferenceDetailId: outStock.ReferenceDetailID,
 				Qty:               outgoingStockHistories[0].Qty.Abs().Sub(processQty),
-				BaseUnitValue:     outStock.BaseUnitValue,
-			}
-		}
-		if existing, found := existingStocks[fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d", outStock.WarehouseId, outStock.ProductId, outStock.ProductType, outStock.BatchNumber, outStock.ReferenceID, outStock.ReferenceType, outStock.ReferenceDetailID)]; found {
-			existing.TotalQty = existing.TotalQty.Add(outStock.Qty.Abs())
-			existing.TotalValue = existing.TotalValue.Add(outStock.Qty.Abs().Mul(outStock.BaseUnitValue))
-			existingStocks[fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d", outStock.WarehouseId, outStock.ProductId, outStock.ProductType, outStock.BatchNumber, outStock.ReferenceID, outStock.ReferenceType, outStock.ReferenceDetailID)] = existing
-		} else {
-			existingStocks[fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d", outStock.WarehouseId, outStock.ProductId, outStock.ProductType, outStock.BatchNumber, outStock.ReferenceID, outStock.ReferenceType, outStock.ReferenceDetailID)] = StockHistoryFragment{
-				BusinessId:        outStock.BusinessId,
-				WarehouseId:       outStock.WarehouseId,
-				ProductId:         outStock.ProductId,
-				ProductType:       outStock.ProductType,
-				BatchNumber:       outStock.BatchNumber,
-				ReferenceId:       outStock.ReferenceID,
-				ReferenceType:     outStock.ReferenceType,
-				ReferenceDetailId: outStock.ReferenceDetailID,
-				TotalQty:          outStock.Qty.Abs(),
-				TotalValue:        outStock.Qty.Abs().Mul(outStock.BaseUnitValue),
-			}
-		}
-		if existing, found := existingStockDetails[fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d-%s", outStock.WarehouseId, outStock.ProductId, outStock.ProductType, outStock.BatchNumber, outStock.ReferenceID, outStock.ReferenceType, outStock.ReferenceDetailID, outStock.BaseUnitValue)]; found {
-			existing.Qty = existing.Qty.Add(outStock.Qty.Abs())
-			existingStockDetails[fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d-%s", outStock.WarehouseId, outStock.ProductId, outStock.ProductType, outStock.BatchNumber, outStock.ReferenceID, outStock.ReferenceType, outStock.ReferenceDetailID, outStock.BaseUnitValue)] = existing
-		} else {
-			existingStockDetails[fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d-%s", outStock.WarehouseId, outStock.ProductId, outStock.ProductType, outStock.BatchNumber, outStock.ReferenceID, outStock.ReferenceType, outStock.ReferenceDetailID, outStock.BaseUnitValue)] = StockHistoryDetailFragment{
-				Id:                outStock.ID,
-				BusinessId:        outStock.BusinessId,
-				WarehouseId:       outStock.WarehouseId,
-				ProductId:         outStock.ProductId,
-				ProductType:       outStock.ProductType,
-				BatchNumber:       outStock.BatchNumber,
-				StockDate:         outStock.StockDate,
-				Description:       outStock.Description,
-				ReferenceId:       outStock.ReferenceID,
-				ReferenceType:     outStock.ReferenceType,
-				ReferenceDetailId: outStock.ReferenceDetailID,
-				Qty:               outStock.Qty.Abs(),
 				BaseUnitValue:     outStock.BaseUnitValue,
 			}
 		}
@@ -669,9 +707,27 @@ func calculateCogs(tx *gorm.DB, logger *logrus.Logger, productDetail ProductDeta
 		}
 
 		if processQty.GreaterThan(decimal.Zero) {
+			// Fallback: if PurchasePrice is 0 and no incoming stock histories found, try to find opening stock
+			unitValue := productDetail.PurchasePrice
+			if unitValue.IsZero() && len(incomingStockHistories) == 0 {
+				var openingStock models.StockHistory
+				err := tx.Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND reference_type = ? AND is_outgoing = false AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
+					outStock.BusinessId, outStock.WarehouseId, outStock.ProductId, outStock.ProductType, outStock.BatchNumber, models.StockReferenceTypeProductOpeningStock).
+					Order("stock_date ASC, id ASC").
+					First(&openingStock).Error
+				if err == nil && !openingStock.BaseUnitValue.IsZero() {
+					unitValue = openingStock.BaseUnitValue
+					logger.WithFields(logrus.Fields{
+						"function":                      "CalculateCogs",
+						"product_id":                    outStock.ProductId,
+						"warehouse_id":                  outStock.WarehouseId,
+						"opening_stock_base_unit_value": unitValue.String(),
+					}).Info("Fallback to opening stock base_unit_value because PurchasePrice is 0 and no incoming stock histories found")
+				}
+			}
 			if existing, found := uniqueStocks[fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d", outStock.WarehouseId, outStock.ProductId, outStock.ProductType, outStock.BatchNumber, outStock.ReferenceID, outStock.ReferenceType, outStock.ReferenceDetailID)]; found {
 				existing.TotalQty = existing.TotalQty.Add(processQty)
-				existing.TotalValue = existing.TotalValue.Add(processQty.Mul(productDetail.PurchasePrice))
+				existing.TotalValue = existing.TotalValue.Add(processQty.Mul(unitValue))
 				uniqueStocks[fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d", outStock.WarehouseId, outStock.ProductId, outStock.ProductType, outStock.BatchNumber, outStock.ReferenceID, outStock.ReferenceType, outStock.ReferenceDetailID)] = existing
 			} else {
 				uniqueStocks[fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d", outStock.WarehouseId, outStock.ProductId, outStock.ProductType, outStock.BatchNumber, outStock.ReferenceID, outStock.ReferenceType, outStock.ReferenceDetailID)] = StockHistoryFragment{
@@ -684,14 +740,14 @@ func calculateCogs(tx *gorm.DB, logger *logrus.Logger, productDetail ProductDeta
 					ReferenceType:     outStock.ReferenceType,
 					ReferenceDetailId: outStock.ReferenceDetailID,
 					TotalQty:          processQty,
-					TotalValue:        processQty.Mul(productDetail.PurchasePrice),
+					TotalValue:        processQty.Mul(unitValue),
 				}
 			}
-			if existing, found := uniqueStockDetails[fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d-%s", outStock.WarehouseId, outStock.ProductId, outStock.ProductType, outStock.BatchNumber, outStock.ReferenceID, outStock.ReferenceType, outStock.ReferenceDetailID, productDetail.PurchasePrice)]; found {
+			if existing, found := uniqueStockDetails[fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d-%s", outStock.WarehouseId, outStock.ProductId, outStock.ProductType, outStock.BatchNumber, outStock.ReferenceID, outStock.ReferenceType, outStock.ReferenceDetailID, unitValue)]; found {
 				existing.Qty = existing.Qty.Add(processQty)
-				uniqueStockDetails[fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d-%s", outStock.WarehouseId, outStock.ProductId, outStock.ProductType, outStock.BatchNumber, outStock.ReferenceID, outStock.ReferenceType, outStock.ReferenceDetailID, productDetail.PurchasePrice)] = existing
+				uniqueStockDetails[fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d-%s", outStock.WarehouseId, outStock.ProductId, outStock.ProductType, outStock.BatchNumber, outStock.ReferenceID, outStock.ReferenceType, outStock.ReferenceDetailID, unitValue)] = existing
 			} else {
-				uniqueStockDetails[fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d-%s", outStock.WarehouseId, outStock.ProductId, outStock.ProductType, outStock.BatchNumber, outStock.ReferenceID, outStock.ReferenceType, outStock.ReferenceDetailID, productDetail.PurchasePrice)] = StockHistoryDetailFragment{
+				uniqueStockDetails[fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d-%s", outStock.WarehouseId, outStock.ProductId, outStock.ProductType, outStock.BatchNumber, outStock.ReferenceID, outStock.ReferenceType, outStock.ReferenceDetailID, unitValue)] = StockHistoryDetailFragment{
 					BusinessId:        outStock.BusinessId,
 					WarehouseId:       outStock.WarehouseId,
 					ProductId:         outStock.ProductId,
@@ -703,7 +759,7 @@ func calculateCogs(tx *gorm.DB, logger *logrus.Logger, productDetail ProductDeta
 					ReferenceType:     outStock.ReferenceType,
 					ReferenceDetailId: outStock.ReferenceDetailID,
 					Qty:               processQty,
-					BaseUnitValue:     productDetail.PurchasePrice,
+					BaseUnitValue:     unitValue,
 				}
 			}
 		}
@@ -907,7 +963,7 @@ func calculateCogs(tx *gorm.DB, logger *logrus.Logger, productDetail ProductDeta
 		if _, found := uniqueStockDetails[key]; !found {
 			// Do not delete historical stock rows; append a reversal instead (auditability).
 			orig := &models.StockHistory{
-				ID:               eStockDetail.Id,
+				ID:                eStockDetail.Id,
 				BusinessId:        eStockDetail.BusinessId,
 				WarehouseId:       eStockDetail.WarehouseId,
 				ProductId:         eStockDetail.ProductId,
