@@ -3,6 +3,10 @@ package models
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/mmdatafocus/books_backend/config"
@@ -10,6 +14,57 @@ import (
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
+
+func debugInventoryAdjustmentValue() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("DEBUG_INVENTORY_ADJUSTMENT_VALUE")))
+	return v == "1" || v == "true" || v == "yes" || v == "y"
+}
+
+// ledgerTotalsForValueAdjustment computes on-hand qty and asset value from the inventory ledger of record (stock_histories).
+//
+// IMPORTANT:
+// - Do NOT rely on StockHistory.ClosingQty/ClosingAssetValue here; those are derived fields and can be stale/uncomputed.
+// - Filter to ACTIVE rows only (exclude reversals and rows that have been reversed).
+// - COALESCE batch_number because legacy rows can be NULL.
+func ledgerTotalsForValueAdjustment(
+	ctx context.Context,
+	db *gorm.DB,
+	businessId string,
+	warehouseId int,
+	productId int,
+	productType ProductType,
+	batchNumber string,
+	asOfDate time.Time,
+) (qtyOnHand decimal.Decimal, assetValue decimal.Decimal, err error) {
+	if db == nil {
+		db = config.GetDB()
+	}
+	if db == nil {
+		return decimal.Zero, decimal.Zero, fmt.Errorf("db is nil")
+	}
+	type row struct {
+		Qty        decimal.Decimal `gorm:"column:qty"`
+		AssetValue decimal.Decimal `gorm:"column:asset_value"`
+	}
+	var r row
+	if err := db.WithContext(ctx).Raw(`
+		SELECT
+		  COALESCE(SUM(qty), 0) AS qty,
+		  COALESCE(SUM(qty * base_unit_value), 0) AS asset_value
+		FROM stock_histories
+		WHERE business_id = ?
+		  AND warehouse_id = ?
+		  AND product_id = ?
+		  AND product_type = ?
+		  AND COALESCE(batch_number, '') = ?
+		  AND stock_date <= ?
+		  AND is_reversal = 0
+		  AND reversed_by_stock_history_id IS NULL
+	`, businessId, warehouseId, productId, productType, batchNumber, asOfDate).Scan(&r).Error; err != nil {
+		return decimal.Zero, decimal.Zero, err
+	}
+	return r.Qty, r.AssetValue, nil
+}
 
 type InventoryAdjustment struct {
 	ID              int                         `gorm:"primary_key" json:"id"`
@@ -124,23 +179,51 @@ func (input NewInventoryAdjustment) validate(ctx context.Context, businessId str
 		// - Value adjustments operate on existing stock on hand; disallow when qty <= 0.
 		if input.AdjustmentType == InventoryAdjustmentTypeValue && inputDetail.ProductId > 0 {
 			db := config.GetDB()
-			var last StockHistory
-			if err := db.WithContext(ctx).
-				Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND stock_date <= ?",
-					businessId, input.WarehouseId, inputDetail.ProductId, inputDetail.ProductType, inputDetail.BatchNumber, adjDate).
-				Order("stock_date DESC, cumulative_sequence DESC").
-				Limit(1).
-				Find(&last).Error; err != nil {
+			qtyOnHand, assetValue, err := ledgerTotalsForValueAdjustment(
+				ctx,
+				db,
+				businessId,
+				input.WarehouseId,
+				inputDetail.ProductId,
+				inputDetail.ProductType,
+				inputDetail.BatchNumber,
+				adjDate,
+			)
+			if err != nil {
 				return err
 			}
-			if last.ID <= 0 {
-				// This is also checked later during status transition; keep this early for better UX.
-				return errors.New("inventory valuation is not ready for this item yet (stock history missing). Please wait a moment and try again, or ensure opening stock posting has completed.")
+
+			// Debug: print the exact IDs and the (wrong) last row that the old code depended on.
+			if debugInventoryAdjustmentValue() {
+				var lastAny StockHistory
+				_ = db.WithContext(ctx).
+					Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND stock_date <= ?",
+						businessId, input.WarehouseId, inputDetail.ProductId, inputDetail.ProductType, inputDetail.BatchNumber, adjDate).
+					Order("stock_date DESC, cumulative_sequence DESC, id DESC").
+					Limit(1).
+					Find(&lastAny).Error
+				log.Printf("[inv_adj_value.validate] business_id=%s branch_id=%d warehouse_id=%d product_id=%d product_type=%s batch=%q as_of=%s ledger_qty_on_hand=%s ledger_asset_value=%s last_any_id=%d last_any_is_reversal=%v last_any_reversed_by=%v last_any_qty=%s last_any_closing_qty=%s",
+					businessId, input.BranchId, input.WarehouseId, inputDetail.ProductId, string(inputDetail.ProductType), inputDetail.BatchNumber, adjDate.Format(time.RFC3339),
+					qtyOnHand.String(), assetValue.String(),
+					lastAny.ID, lastAny.IsReversal, lastAny.ReversedByStockHistoryId, lastAny.Qty.String(), lastAny.ClosingQty.String(),
+				)
 			}
-			if last.ClosingQty.LessThanOrEqual(decimal.Zero) {
+
+			if qtyOnHand.LessThanOrEqual(decimal.Zero) {
+				// If cache says there is stock but ledger sum is zero, it’s a worker/legacy ledger readiness issue.
+				var cacheQty decimal.Decimal
+				_ = db.WithContext(ctx).Model(&StockSummary{}).
+					Select("COALESCE(SUM(current_qty), 0)").
+					Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ?",
+						businessId, input.WarehouseId, inputDetail.ProductId, inputDetail.ProductType, inputDetail.BatchNumber).
+					Scan(&cacheQty).Error
+				if cacheQty.GreaterThan(decimal.Zero) {
+					return errors.New("inventory valuation is not ready for this item yet (stock ledger missing). Please wait a moment and try again, or ensure opening stock posting has completed.")
+				}
 				return errors.New("cannot adjust inventory value when stock on hand is zero")
 			}
-			finalValue := last.ClosingAssetValue.Add(inputDetail.AdjustedValue)
+
+			finalValue := assetValue.Add(inputDetail.AdjustedValue)
 			if finalValue.IsNegative() {
 				return errors.New("value adjustment would make inventory value negative")
 			}
@@ -267,8 +350,10 @@ WHERE business_id = ?
   AND warehouse_id = ?
   AND product_id = ?
   AND product_type = ?
-  AND batch_number = ?
+  AND COALESCE(batch_number,'') = ?
   AND stock_date <= ?
+  AND is_reversal = 0
+  AND reversed_by_stock_history_id IS NULL
 LIMIT 1
 `, inventoryAdjustment.BusinessId, inventoryAdjustment.WarehouseId, d.ProductId, d.ProductType, d.BatchNumber, stockDate).Scan(&exists).Error; err != nil {
 					tx.Rollback()

@@ -123,9 +123,16 @@ func CreateInventoryAdjustmentValue(tx *gorm.DB, logger *logrus.Logger, recordId
 			}
 
 			var lastStockHistory models.StockHistory
-			err = tx.Where("warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? and stock_date <= ?",
-				inventoryAdjustment.WarehouseId, inventoryAdjustmentDetail.ProductId, inventoryAdjustmentDetail.ProductType, inventoryAdjustmentDetail.BatchNumber,
-				stockDate).Order("stock_date DESC, cumulative_sequence DESC").Limit(1).Find(&lastStockHistory).Error
+			// IMPORTANT: only consider ACTIVE ledger rows and always scope by business_id.
+			// Otherwise, we can:
+			// - pick reversal/inactive rows (closing balances may be 0)
+			// - pick rows from another tenant in rare cases (warehouse IDs are not globally unique assumptions)
+			err = tx.
+				Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND stock_date <= ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
+					businessId, inventoryAdjustment.WarehouseId, inventoryAdjustmentDetail.ProductId, inventoryAdjustmentDetail.ProductType, inventoryAdjustmentDetail.BatchNumber, stockDate).
+				Order("stock_date DESC, cumulative_sequence DESC, id DESC").
+				Limit(1).
+				Find(&lastStockHistory).Error
 			if err != nil {
 				config.LogError(logger, "InventoryAdjustmentValueWorkflow.go", "CreateInventoryAdjustmentValue", "GetLastStockHistory", inventoryAdjustmentDetail, err)
 				return 0, nil, 0, nil, err
