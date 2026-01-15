@@ -116,6 +116,25 @@ func TestInventoryAdjustmentValue_WithOnHand_AllowsSaveAndKeepsQty(t *testing.T)
 		t.Fatalf("opening stock workflow commit: %v", err)
 	}
 
+	// Simulate real production behavior: stock_histories.stock_date can include a non-midnight timestamp.
+	// Prior to the fix, Value Adjustment validation used stock_date <= start-of-day and incorrectly treated
+	// same-day stock as "ledger missing". This update makes the regression deterministic.
+	sameDayStockTs := time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC)
+	res := db.WithContext(ctx).Exec(`
+		UPDATE stock_histories
+		SET stock_date = ?
+		WHERE business_id = ?
+		  AND warehouse_id = ?
+		  AND product_id = ?
+		  AND product_type = ?
+	`, sameDayStockTs, businessID, primary.ID, philips.ID, models.ProductTypeSingle)
+	if res.Error != nil {
+		t.Fatalf("update stock_histories.stock_date: %v", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		t.Fatalf("expected to update at least 1 stock_history row for opening stock; got 0")
+	}
+
 	adjDate := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
 
 	// Value adjustment: +1 per unit => total delta +9.

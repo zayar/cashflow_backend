@@ -47,6 +47,11 @@ func ledgerTotalsForValueAdjustment(
 		AssetValue decimal.Decimal `gorm:"column:asset_value"`
 	}
 	var r row
+	// ConvertToDate() normalizes to start-of-day (00:00) in business timezone.
+	// stock_histories.stock_date is a timestamp, so using <= start-of-day will EXCLUDE same-day postings.
+	// Use an exclusive upper bound (< next day start) to include the whole day.
+	asOfStart := time.Date(asOfDate.Year(), asOfDate.Month(), asOfDate.Day(), 0, 0, 0, 0, asOfDate.Location())
+	asOfExclusiveEnd := asOfStart.AddDate(0, 0, 1)
 	if err := db.WithContext(ctx).Raw(`
 		SELECT
 		  COALESCE(SUM(qty), 0) AS qty,
@@ -57,10 +62,10 @@ func ledgerTotalsForValueAdjustment(
 		  AND product_id = ?
 		  AND product_type = ?
 		  AND COALESCE(batch_number, '') = ?
-		  AND stock_date <= ?
+		  AND stock_date < ?
 		  AND is_reversal = 0
 		  AND reversed_by_stock_history_id IS NULL
-	`, businessId, warehouseId, productId, productType, batchNumber, asOfDate).Scan(&r).Error; err != nil {
+	`, businessId, warehouseId, productId, productType, batchNumber, asOfExclusiveEnd).Scan(&r).Error; err != nil {
 		return decimal.Zero, decimal.Zero, err
 	}
 	return r.Qty, r.AssetValue, nil
@@ -169,6 +174,8 @@ func (input NewInventoryAdjustment) validate(ctx context.Context, businessId str
 	if err != nil {
 		return err
 	}
+	// ConvertToDate() is start-of-day; use an exclusive upper bound to include same-day ledger rows.
+	adjDateExclusiveEnd := adjDate.AddDate(0, 0, 1)
 	for _, inputDetail := range input.Details {
 		if err := ValidateValueAdjustment(ctx, businessId, input.AdjustmentDate, inputDetail.ProductType, inputDetail.ProductId, &inputDetail.BatchNumber, input.AdjustmentType == InventoryAdjustmentTypeValue); err != nil {
 			return err
@@ -197,8 +204,8 @@ func (input NewInventoryAdjustment) validate(ctx context.Context, businessId str
 			if debugInventoryAdjustmentValue() {
 				var lastAny StockHistory
 				_ = db.WithContext(ctx).
-					Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND stock_date <= ?",
-						businessId, input.WarehouseId, inputDetail.ProductId, inputDetail.ProductType, inputDetail.BatchNumber, adjDate).
+					Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND stock_date < ?",
+						businessId, input.WarehouseId, inputDetail.ProductId, inputDetail.ProductType, inputDetail.BatchNumber, adjDateExclusiveEnd).
 					Order("stock_date DESC, cumulative_sequence DESC, id DESC").
 					Limit(1).
 					Find(&lastAny).Error
@@ -227,8 +234,8 @@ func (input NewInventoryAdjustment) validate(ctx context.Context, businessId str
 						SELECT COALESCE(SUM(qty), 0) AS qty
 						FROM stock_histories
 						WHERE business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ?
-						  AND stock_date <= ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
-					`, businessId, input.WarehouseId, inputDetail.ProductId, inputDetail.ProductType, adjDate).Scan(&anyBatchQty).Error
+						  AND stock_date < ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
+					`, businessId, input.WarehouseId, inputDetail.ProductId, inputDetail.ProductType, adjDateExclusiveEnd).Scan(&anyBatchQty).Error
 					log.Printf("[inv_adj_value.validate] MISMATCH: cache_qty=%s ledger_qty_for_batch=%q=%s ledger_qty_any_batch=%s batch_number=%q",
 						cacheQty.String(), inputDetail.BatchNumber, qtyOnHand.String(), anyBatchQty.String(), inputDetail.BatchNumber)
 				}
@@ -354,6 +361,7 @@ func CreateInventoryAdjustment(ctx context.Context, input *NewInventoryAdjustmen
 				tx.Rollback()
 				return nil, err
 			}
+			stockDateExclusiveEnd := stockDate.AddDate(0, 0, 1)
 			for _, d := range inventoryAdjustment.Details {
 				if d.ProductId <= 0 {
 					continue
@@ -367,11 +375,11 @@ WHERE business_id = ?
   AND product_id = ?
   AND product_type = ?
   AND COALESCE(batch_number,'') = ?
-  AND stock_date <= ?
+  AND stock_date < ?
   AND is_reversal = 0
   AND reversed_by_stock_history_id IS NULL
 LIMIT 1
-`, inventoryAdjustment.BusinessId, inventoryAdjustment.WarehouseId, d.ProductId, d.ProductType, d.BatchNumber, stockDate).Scan(&exists).Error; err != nil {
+`, inventoryAdjustment.BusinessId, inventoryAdjustment.WarehouseId, d.ProductId, d.ProductType, d.BatchNumber, stockDateExclusiveEnd).Scan(&exists).Error; err != nil {
 					tx.Rollback()
 					return nil, err
 				}

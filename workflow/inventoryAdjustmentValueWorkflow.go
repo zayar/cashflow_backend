@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"slices"
 	"strconv"
+	"time"
 
 	"github.com/mmdatafocus/books_backend/config"
 	"github.com/mmdatafocus/books_backend/models"
@@ -113,6 +114,10 @@ func CreateInventoryAdjustmentValue(tx *gorm.DB, logger *logrus.Logger, recordId
 	if err != nil {
 		return 0, nil, 0, nil, err
 	}
+	// ConvertToDate() returns start-of-day. stock_histories.stock_date is a timestamp, so use
+	// an inclusive end-of-day for "until date" semantics and an exclusive next-day bound for "<".
+	stockDateExclusiveEnd := stockDate.AddDate(0, 0, 1)
+	stockDateInclusiveEnd := time.Date(stockDate.Year(), stockDate.Month(), stockDate.Day(), 23, 59, 59, 0, stockDate.Location())
 
 	for _, inventoryAdjustmentDetail := range inventoryAdjustment.Details {
 		if inventoryAdjustmentDetail.ProductId > 0 {
@@ -128,8 +133,8 @@ func CreateInventoryAdjustmentValue(tx *gorm.DB, logger *logrus.Logger, recordId
 			// - pick reversal/inactive rows (closing balances may be 0)
 			// - pick rows from another tenant in rare cases (warehouse IDs are not globally unique assumptions)
 			err = tx.
-				Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND stock_date <= ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
-					businessId, inventoryAdjustment.WarehouseId, inventoryAdjustmentDetail.ProductId, inventoryAdjustmentDetail.ProductType, inventoryAdjustmentDetail.BatchNumber, stockDate).
+				Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND stock_date < ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
+					businessId, inventoryAdjustment.WarehouseId, inventoryAdjustmentDetail.ProductId, inventoryAdjustmentDetail.ProductType, inventoryAdjustmentDetail.BatchNumber, stockDateExclusiveEnd).
 				Order("stock_date DESC, cumulative_sequence DESC, id DESC").
 				Limit(1).
 				Find(&lastStockHistory).Error
@@ -141,7 +146,7 @@ func CreateInventoryAdjustmentValue(tx *gorm.DB, logger *logrus.Logger, recordId
 				config.LogError(logger, "InventoryAdjustmentValueWorkflow.go", "CreateInventoryAdjustmentValue", "LastStockHistory not found", inventoryAdjustmentDetail, err)
 				return 0, nil, 0, nil, err
 			}
-			remainingIncomingStockHistories, err := GetRemainingStockHistoriesByCumulativeQtyUntilDate(tx, inventoryAdjustment.WarehouseId, inventoryAdjustmentDetail.ProductId, string(inventoryAdjustmentDetail.ProductType), inventoryAdjustmentDetail.BatchNumber, utils.NewFalse(), lastStockHistory.CumulativeOutgoingQty, stockDate)
+			remainingIncomingStockHistories, err := GetRemainingStockHistoriesByCumulativeQtyUntilDate(tx, inventoryAdjustment.WarehouseId, inventoryAdjustmentDetail.ProductId, string(inventoryAdjustmentDetail.ProductType), inventoryAdjustmentDetail.BatchNumber, utils.NewFalse(), lastStockHistory.CumulativeOutgoingQty, stockDateInclusiveEnd)
 			if err != nil {
 				config.LogError(logger, "InventoryAdjustmentValueWorkflow.go", "CreateInventoryAdjustmentValue", "GetRemainingStockHistoriesByCumulativeQty", inventoryAdjustmentDetail, err)
 				return 0, nil, 0, nil, err
