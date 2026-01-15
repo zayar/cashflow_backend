@@ -137,7 +137,8 @@ func TestInventoryAdjustmentValue_WithOnHand_AllowsSaveAndKeepsQty(t *testing.T)
 
 	adjDate := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
 
-	// Value adjustment: +1 per unit => total delta +9.
+	// Value adjustment UI semantics: adjustedValue is NEW UNIT COST.
+	// New unit cost = 101 (from opening 100, changed +1).
 	ia, err := models.CreateInventoryAdjustment(ctx, &models.NewInventoryAdjustment{
 		ReferenceNumber: "IVAV-0001",
 		AdjustmentType:  models.InventoryAdjustmentTypeValue,
@@ -154,7 +155,7 @@ func TestInventoryAdjustmentValue_WithOnHand_AllowsSaveAndKeepsQty(t *testing.T)
 				ProductType:   models.ProductTypeSingle,
 				BatchNumber:   "",
 				Name:          "Philips",
-				AdjustedValue: decimal.NewFromInt(9),   // total value delta
+				AdjustedValue: decimal.NewFromInt(101), // new unit cost
 				CostPrice:     decimal.NewFromInt(100), // required field; not used by IVAV engine
 			},
 		},
@@ -180,7 +181,7 @@ func TestInventoryAdjustmentValue_WithOnHand_AllowsSaveAndKeepsQty(t *testing.T)
 		t.Fatalf("IVAV workflow commit: %v", err)
 	}
 
-	// Assert qty unchanged at 9 and asset value becomes 9*(100+1)=909 as-of date.
+	// Assert qty unchanged at 9 and asset value becomes 9*101=909 as-of date.
 	type sums struct {
 		Qty        decimal.Decimal `gorm:"column:qty"`
 		AssetValue decimal.Decimal `gorm:"column:asset_value"`

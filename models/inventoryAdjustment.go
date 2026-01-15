@@ -246,7 +246,9 @@ func (input NewInventoryAdjustment) validate(ctx context.Context, businessId str
 				return errors.New("cannot adjust inventory value when stock on hand is zero")
 			}
 
-			finalValue := assetValue.Add(inputDetail.AdjustedValue)
+			// Frontend semantics: adjustedValue is the NEW UNIT COST (not a delta).
+			// Final asset value = qty_on_hand * new_unit_cost.
+			finalValue := qtyOnHand.Mul(inputDetail.AdjustedValue)
 			if finalValue.IsNegative() {
 				return errors.New("value adjustment would make inventory value negative")
 			}

@@ -181,7 +181,9 @@ func CreateInventoryAdjustmentValue(tx *gorm.DB, logger *logrus.Logger, recordId
 				}
 			}
 
-			newBaseUnitValue := totalValue.Add(inventoryAdjustmentDetail.AdjustedValue).DivRound(totalQty, 4)
+			// Frontend semantics: adjustedValue is the NEW UNIT COST (not a delta total).
+			// Delta amount posted = (new_unit_cost * qty) - current_asset_value.
+			newBaseUnitValue := inventoryAdjustmentDetail.AdjustedValue.Round(4)
 			stockHistory := models.StockHistory{
 				BusinessId:        inventoryAdjustment.BusinessId,
 				WarehouseId:       inventoryAdjustment.WarehouseId,

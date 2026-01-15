@@ -350,73 +350,62 @@ func GetClosingInventoryValuation(ctx context.Context, currentDate MyDateString,
 		}
 	}
 
+	// IMPORTANT:
+	// - Do NOT rely on closing_qty/closing_asset_value here; those are derived and can be stale.
+	// - Do NOT pick "last row" (can be reversal/outgoing row with misleading base_unit_value).
+	// - Compute valuation from the ACTIVE ledger-of-record rows (stock_histories) as-of currentDate.
 	sqlT := `
 WITH AllProductUnits AS (
     SELECT
         unit_id product_unit_id,
         id product_id,
         'S' as product_type,
-		description product_description
-    from
-        products
-	WHERE business_id = @businessId
+        description product_description
+    FROM products
+    WHERE business_id = @businessId
     UNION
     (SELECT
         pv.unit_id product_unit_id,
         pv.id product_id,
         'V' as product_type,
-		pg.description product_description
-    from
-        product_variants pv
-	LEFT JOIN product_groups pg
-		ON pv.product_group_id = pg.id
-	WHERE pv.business_id = @businessId)
+        pg.description product_description
+    FROM product_variants pv
+    LEFT JOIN product_groups pg
+        ON pv.product_group_id = pg.id
+    WHERE pv.business_id = @businessId)
 ),
-LastStockHistories AS (
+LedgerSums AS (
     SELECT
         product_id,
         product_type,
-        closing_qty stock_on_hand,
-        closing_asset_value asset_value,
-		base_unit_value unit_cost
-    FROM
-    (
-        SELECT
-            ROW_NUMBER() OVER (
-                PARTITION BY
-                product_id,
-                product_type -- batch_number
-                ORDER BY
-                    cumulative_sequence DESC
-            ) AS rn,
-            warehouse_id,
-            product_id,
-            product_type,
-            closing_qty,
-            closing_asset_value,
-			base_unit_value,
-			stock_date
-        FROM
-            stock_histories
-			WHERE business_id = @businessId AND
-			stock_date <= @currentDate
-                AND warehouse_id = @warehouseId
-			{{- if .BatchNumber }}
-				AND batch_number = @batchNumber
-			{{- end }}
-    )
-    AS stock_histories_ranked
-    WHERE
-        rn = 1
+        COALESCE(SUM(qty), 0) AS stock_on_hand,
+        COALESCE(SUM(qty * base_unit_value), 0) AS asset_value
+    FROM stock_histories
+    WHERE business_id = @businessId
+      AND warehouse_id = @warehouseId
+      AND stock_date <= @currentDate
+      AND is_reversal = 0
+      AND reversed_by_stock_history_id IS NULL
+      {{- if .BatchNumber }}
+        AND COALESCE(batch_number,'') = @batchNumber
+      {{- end }}
+    GROUP BY product_id, product_type
 )
 SELECT
-	sh.*,
-	pu.product_unit_id,
-	pu.product_description
-FROM LastStockHistories sh
+    ls.product_id,
+    ls.product_type,
+    ls.stock_on_hand,
+    ls.asset_value,
+    CASE
+      WHEN ls.stock_on_hand = 0 THEN 0
+      ELSE ls.asset_value / ls.stock_on_hand
+    END AS unit_cost,
+    pu.product_unit_id,
+    pu.product_description
+FROM LedgerSums ls
 LEFT JOIN AllProductUnits pu
-	ON sh.product_id = pu.product_id and sh.product_type = pu.product_type
-	`
+    ON ls.product_id = pu.product_id AND ls.product_type = pu.product_type
+`
 
 	db := config.GetDB()
 	sql, err := utils.ExecTemplate(sqlT, map[string]interface{}{
@@ -436,9 +425,8 @@ LEFT JOIN AllProductUnits pu
 		return nil, err
 	}
 
-	// Fallback: some legacy datasets have stock_summaries populated but no stock_histories rows.
-	// In that case, UI flows (invoice/bill/adjustment forms) would incorrectly show "0" stock.
-	// We fall back to stock_summaries (current snapshot) ONLY when there are no stock_histories results.
+	// Fallback: some datasets have stock_summaries populated but no stock_histories rows.
+	// We keep this fallback to avoid breaking UI flows, but note unit_cost/asset_value will be 0.
 	if len(results) == 0 {
 		fallbackSQL := `
 WITH AllProductUnits AS (
