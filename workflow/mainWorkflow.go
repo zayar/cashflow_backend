@@ -403,6 +403,7 @@ func GetRemainingStockHistoriesByCumulativeQty(tx *gorm.DB, warehouseId int, pro
 			SELECT * FROM stock_histories
 			WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
 				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND is_outgoing = true AND cumulative_outgoing_qty > ?
+				AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
 			ORDER BY stock_date, is_outgoing, id ASC;
 			`, warehouseId, warehouseId, productId, productType, batchNumber, qty).Find(&remaininigStockHistories).Error
 	} else {
@@ -410,6 +411,7 @@ func GetRemainingStockHistoriesByCumulativeQty(tx *gorm.DB, warehouseId int, pro
 			SELECT * FROM stock_histories
 			WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
 				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND is_outgoing = false AND cumulative_incoming_qty > ?
+				AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
 			ORDER BY stock_date, is_outgoing, id ASC;
 			`, warehouseId, warehouseId, productId, productType, batchNumber, qty).Find(&remaininigStockHistories).Error
 	}
@@ -427,6 +429,7 @@ func GetRemainingStockHistoriesByCumulativeQtyUntilDate(tx *gorm.DB, warehouseId
 			SELECT * FROM stock_histories
 			WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
 				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND is_outgoing = true AND cumulative_outgoing_qty > ? AND stock_date <= ?
+				AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
 			ORDER BY stock_date, is_outgoing, id ASC;
 			`, warehouseId, warehouseId, productId, productType, batchNumber, qty, stockDate).Find(&remaininigStockHistories).Error
 	} else {
@@ -434,6 +437,7 @@ func GetRemainingStockHistoriesByCumulativeQtyUntilDate(tx *gorm.DB, warehouseId
 			SELECT * FROM stock_histories
 			WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
 				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND is_outgoing = false AND cumulative_incoming_qty > ? AND stock_date <= ?
+				AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
 			ORDER BY stock_date, is_outgoing, id ASC;
 			`, warehouseId, warehouseId, productId, productType, batchNumber, qty, stockDate).Find(&remaininigStockHistories).Error
 	}
@@ -450,6 +454,7 @@ func GetRemainingStockHistoriesByDate(tx *gorm.DB, warehouseId int, productId in
 			SELECT * FROM stock_histories
 			WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
 				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND is_outgoing = true AND stock_date >= ?
+				AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
 			ORDER BY stock_date, is_outgoing, id ASC;
 			`, warehouseId, warehouseId, productId, productType, batchNumber, stockDate).Find(&remaininigStockHistories).Error
 	} else {
@@ -457,6 +462,7 @@ func GetRemainingStockHistoriesByDate(tx *gorm.DB, warehouseId int, productId in
 			SELECT * FROM stock_histories
 			WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
 				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND is_outgoing = false AND stock_date >= ?
+				AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
 			ORDER BY stock_date, is_outgoing, id ASC;
 			`, warehouseId, warehouseId, productId, productType, batchNumber, stockDate).Find(&remaininigStockHistories).Error
 	}
@@ -844,6 +850,34 @@ func calculateCogs(tx *gorm.DB, logger *logrus.Logger, productDetail ProductDeta
 				return accountIds, err
 			}
 		} else {
+			// Defensive idempotency: never create duplicate active stock_histories rows for the same
+			// reference detail + base_unit_value bucket. This can happen under at-least-once processing
+			// or when recalculation is re-run for the same date range.
+			dup := new(models.StockHistory)
+			dupErr := tx.
+				Where(
+					"business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND reference_type = ? AND reference_id = ? AND reference_detail_id = ? AND is_outgoing = 1 AND qty = ? AND base_unit_value = ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
+					uStockDetail.BusinessId,
+					uStockDetail.WarehouseId,
+					uStockDetail.ProductId,
+					uStockDetail.ProductType,
+					uStockDetail.BatchNumber,
+					uStockDetail.ReferenceType,
+					uStockDetail.ReferenceId,
+					uStockDetail.ReferenceDetailId,
+					uStockDetail.Qty.Neg(),
+					uStockDetail.BaseUnitValue,
+				).
+				First(dup).Error
+			if dupErr == nil {
+				// Already exists; do not insert another identical active row.
+				continue
+			}
+			if dupErr != gorm.ErrRecordNotFound {
+				config.LogError(logger, "MainWorkflow.go", "CalculateCogs", "FindDuplicateStockHistory", uStockDetail, dupErr)
+				return accountIds, dupErr
+			}
+
 			err = tx.Create(&models.StockHistory{
 				BusinessId:        uStockDetail.BusinessId,
 				WarehouseId:       uStockDetail.WarehouseId,
