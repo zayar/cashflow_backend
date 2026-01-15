@@ -20,6 +20,7 @@ func ProcessInventoryAdjustmentValueWorkflow(tx *gorm.DB, logger *logrus.Logger,
 	var accountIds []int
 	var foreignCurrencyId int
 	var stockHistories []*models.StockHistory
+	cid, _ := utils.GetCorrelationIdFromContext(tx.Statement.Context)
 	business, err := models.GetBusinessById2(tx, msg.BusinessId)
 	if err != nil {
 		config.LogError(logger, "InventoryAdjustmentValueWorkflow.go", "ProcessInventoryAdjustmentValueWorkflow", "GetBusiness", msg.BusinessId, err)
@@ -32,6 +33,15 @@ func ProcessInventoryAdjustmentValueWorkflow(tx *gorm.DB, logger *logrus.Logger,
 		if err != nil {
 			config.LogError(logger, "InventoryAdjustmentValueWorkflow.go", "ProcessInventoryAdjustmentValueWorkflow > Create", "Unmarshal msg.NewObj", msg.NewObj, err)
 			return err
+		}
+		if logger != nil {
+			logger.WithFields(logrus.Fields{
+				"correlation_id": cid,
+				"business_id":    msg.BusinessId,
+				"message_id":     msg.ID,
+				"reference_type": msg.ReferenceType,
+				"reference_id":   msg.ReferenceId,
+			}).Info("ivav: processing message")
 		}
 		accountJournalId, accountIds, foreignCurrencyId, stockHistories, err = CreateInventoryAdjustmentValue(tx, logger, msg.ID, msg.ReferenceType, msg.BusinessId, *business, inventoryAdjustment)
 		if err != nil {

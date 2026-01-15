@@ -202,6 +202,7 @@ func (input NewInventoryAdjustment) validate(ctx context.Context, businessId str
 
 			// Debug: print the exact IDs and the (wrong) last row that the old code depended on.
 			if debugInventoryAdjustmentValue() {
+				cid, _ := utils.GetCorrelationIdFromContext(ctx)
 				var lastAny StockHistory
 				_ = db.WithContext(ctx).
 					Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND stock_date < ?",
@@ -209,8 +210,8 @@ func (input NewInventoryAdjustment) validate(ctx context.Context, businessId str
 					Order("stock_date DESC, cumulative_sequence DESC, id DESC").
 					Limit(1).
 					Find(&lastAny).Error
-				log.Printf("[inv_adj_value.validate] business_id=%s branch_id=%d warehouse_id=%d product_id=%d product_type=%s batch=%q as_of=%s ledger_qty_on_hand=%s ledger_asset_value=%s last_any_id=%d last_any_is_reversal=%v last_any_reversed_by=%v last_any_qty=%s last_any_closing_qty=%s",
-					businessId, input.BranchId, input.WarehouseId, inputDetail.ProductId, string(inputDetail.ProductType), inputDetail.BatchNumber, adjDate.Format(time.RFC3339),
+				log.Printf("[inv_adj_value.validate] correlation_id=%s business_id=%s branch_id=%d warehouse_id=%d product_id=%d product_type=%s batch=%q as_of=%s ledger_qty_on_hand=%s ledger_asset_value=%s last_any_id=%d last_any_is_reversal=%v last_any_reversed_by=%v last_any_qty=%s last_any_closing_qty=%s",
+					cid, businessId, input.BranchId, input.WarehouseId, inputDetail.ProductId, string(inputDetail.ProductType), inputDetail.BatchNumber, adjDate.Format(time.RFC3339),
 					qtyOnHand.String(), assetValue.String(),
 					lastAny.ID, lastAny.IsReversal, lastAny.ReversedByStockHistoryId, lastAny.Qty.String(), lastAny.ClosingQty.String(),
 				)
@@ -228,6 +229,7 @@ func (input NewInventoryAdjustment) validate(ctx context.Context, businessId str
 				
 				// Debug logging when mismatch detected
 				if debugInventoryAdjustmentValue() {
+					cid, _ := utils.GetCorrelationIdFromContext(ctx)
 					// Check if stock exists in ledger for ANY batch (to diagnose batch mismatch)
 					var anyBatchQty decimal.Decimal
 					_ = db.WithContext(ctx).Raw(`
@@ -236,8 +238,8 @@ func (input NewInventoryAdjustment) validate(ctx context.Context, businessId str
 						WHERE business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ?
 						  AND stock_date < ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
 					`, businessId, input.WarehouseId, inputDetail.ProductId, inputDetail.ProductType, adjDateExclusiveEnd).Scan(&anyBatchQty).Error
-					log.Printf("[inv_adj_value.validate] MISMATCH: cache_qty=%s ledger_qty_for_batch=%q=%s ledger_qty_any_batch=%s batch_number=%q",
-						cacheQty.String(), inputDetail.BatchNumber, qtyOnHand.String(), anyBatchQty.String(), inputDetail.BatchNumber)
+					log.Printf("[inv_adj_value.validate] correlation_id=%s MISMATCH: cache_qty=%s ledger_qty_for_batch=%q=%s ledger_qty_any_batch=%s batch_number=%q",
+						cid, cacheQty.String(), inputDetail.BatchNumber, qtyOnHand.String(), anyBatchQty.String(), inputDetail.BatchNumber)
 				}
 				
 				if cacheQty.GreaterThan(decimal.Zero) {
@@ -256,6 +258,19 @@ func (input NewInventoryAdjustment) validate(ctx context.Context, businessId str
 	}
 
 	return nil
+}
+
+// ValidateInventoryAdjustmentInput validates an inventory adjustment input WITHOUT creating any DB rows.
+// This is used by reproducibility harnesses and internal diagnostics.
+func ValidateInventoryAdjustmentInput(ctx context.Context, input *NewInventoryAdjustment) error {
+	if input == nil {
+		return errors.New("input is nil")
+	}
+	businessId, ok := utils.GetBusinessIdFromContext(ctx)
+	if !ok || businessId == "" {
+		return errors.New("business id is required")
+	}
+	return input.validate(ctx, businessId, 0)
 }
 
 func CreateInventoryAdjustment(ctx context.Context, input *NewInventoryAdjustment) (*InventoryAdjustment, error) {

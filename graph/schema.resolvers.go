@@ -11,10 +11,12 @@ import (
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/google/uuid"
+	"github.com/mmdatafocus/books_backend/config"
 	"github.com/mmdatafocus/books_backend/middlewares"
 	"github.com/mmdatafocus/books_backend/models"
 	"github.com/mmdatafocus/books_backend/models/reports"
 	"github.com/mmdatafocus/books_backend/utils"
+	"github.com/mmdatafocus/books_backend/workflow"
 	"github.com/shopspring/decimal"
 )
 
@@ -1645,6 +1647,22 @@ func (r *mutationResolver) CreateTransferOrder(ctx context.Context, input models
 
 // CreateInventoryAdjustment is the resolver for the createInventoryAdjustment field.
 func (r *mutationResolver) CreateInventoryAdjustment(ctx context.Context, input models.NewInventoryAdjustment) (*models.InventoryAdjustment, error) {
+	// Determinism guard for Value Adjustments:
+	// The UI shows Stock on Hand from cache (stock_summaries), but IVAV requires valuation ledger (stock_histories).
+	// If the cache was updated before Product Opening Stock outbox is processed, IVAV becomes nondeterministic.
+	// We opportunistically process pending opening stock outbox synchronously to eliminate the race.
+	if input.AdjustmentType == models.InventoryAdjustmentTypeValue && input.WarehouseId > 0 {
+		businessID, ok := utils.GetBusinessIdFromContext(ctx)
+		if ok && businessID != "" {
+			logger := config.GetLogger()
+			for _, d := range input.Details {
+				if d.ProductId <= 0 {
+					continue
+				}
+				_, _ = workflow.EnsureIVAVPrereqLedgerReady(ctx, logger, businessID, input.WarehouseId, d.ProductId, d.ProductType, d.BatchNumber, input.AdjustmentDate)
+			}
+		}
+	}
 	return models.CreateInventoryAdjustment(ctx, &input)
 }
 

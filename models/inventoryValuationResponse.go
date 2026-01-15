@@ -3,12 +3,19 @@ package models
 import (
 	"context"
 	"errors"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/mmdatafocus/books_backend/config"
 	"github.com/mmdatafocus/books_backend/utils"
 	"github.com/shopspring/decimal"
 )
+
+func debugInventoryValuation() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("DEBUG_INVENTORY_VALUATION")))
+	return v == "1" || v == "true" || v == "yes" || v == "y"
+}
 
 type InventoryValuationResponse struct {
 	OpeningStockOnHand decimal.Decimal             `json:"openingStockOnHand"`
@@ -333,6 +340,7 @@ func GetClosingInventoryValuation(ctx context.Context, currentDate MyDateString,
 	if !ok || businessId == "" {
 		return nil, errors.New("business id is required")
 	}
+	cid, _ := utils.GetCorrelationIdFromContext(ctx)
 	business, err := GetBusiness(ctx)
 	if err != nil {
 		return nil, errors.New("business id is required")
@@ -425,6 +433,21 @@ LEFT JOIN AllProductUnits pu
 		return nil, err
 	}
 
+	if debugInventoryValuation() {
+		logger := config.GetLogger()
+		logger.WithFields(map[string]interface{}{
+			"correlation_id": cid,
+			"business_id":    businessId,
+			"warehouse_id":   warehouseId,
+			"current_date":   currentDate,
+			"product_id":     utils.DereferencePtr(productId),
+			"product_type":   utils.DereferencePtr(productType),
+			"batch_number":   utils.DereferencePtr(batchNumber),
+			"rows":           len(results),
+			"source":         "stock_histories_sum",
+		}).Info("closing_inventory: computed valuation snapshot")
+	}
+
 	// Fallback: some datasets have stock_summaries populated but no stock_histories rows.
 	// We keep this fallback to avoid breaking UI flows, but note unit_cost/asset_value will be 0.
 	if len(results) == 0 {
@@ -472,6 +495,17 @@ WHERE
 			return nil, err
 		}
 		results = fallback
+		if debugInventoryValuation() {
+			logger := config.GetLogger()
+			logger.WithFields(map[string]interface{}{
+				"correlation_id": cid,
+				"business_id":    businessId,
+				"warehouse_id":   warehouseId,
+				"current_date":   currentDate,
+				"rows":           len(results),
+				"source":         "stock_summaries_fallback",
+			}).Warn("closing_inventory: ledger missing; returned cache fallback (unit_cost/asset_value=0)")
+		}
 	}
 	return results, nil
 }

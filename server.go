@@ -249,6 +249,18 @@ func graphqlHandler() gin.HandlerFunc {
 		h.Use(extension.AutomaticPersistedQuery{Cache: cache})
 	}
 	return func(c *gin.Context) {
+		// Correlation ID propagation for GraphQL requests:
+		// - Prefer caller-provided headers (X-Correlation-Id / X-Request-Id)
+		// - Otherwise generate a best-effort ID so logs can be joined across read/validate/post flows.
+		correlationID := strings.TrimSpace(c.GetHeader("X-Correlation-Id"))
+		if correlationID == "" {
+			correlationID = strings.TrimSpace(c.GetHeader("X-Request-Id"))
+		}
+		if correlationID == "" {
+			// Small, non-crypto correlation id: timestamp-based.
+			correlationID = fmt.Sprintf("gql-%d", time.Now().UnixNano())
+		}
+		c.Request = c.Request.WithContext(utils.SetCorrelationIdInContext(c.Request.Context(), correlationID))
 		h.ServeHTTP(c.Writer, c.Request)
 	}
 }
