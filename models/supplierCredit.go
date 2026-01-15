@@ -587,8 +587,6 @@ func UpdateSupplierCredit(ctx context.Context, supplierCreditID int, updatedSupp
 	}
 
 	var existingSupplierCredit = *oldSupplierCredit
-	// deep copy oldSupplierCredit.Details
-	existingDetails := append([]SupplierCreditDetail(nil), existingSupplierCredit.Details...)
 	oldStatus := existingSupplierCredit.CurrentStatus
 
 	oldCreditDate := utils.NilOrElse(existingSupplierCredit.SupplierCreditDate.Equal(updatedSupplierCredit.SupplierCreditDate), existingSupplierCredit.SupplierCreditDate)
@@ -623,12 +621,13 @@ func UpdateSupplierCredit(ctx context.Context, supplierCreditID int, updatedSupp
 	tx := db.Begin()
 	for _, updatedItem := range updatedSupplierCredit.Details {
 		var existingItem *SupplierCreditDetail
-
-		// Check if the item already exists in the purchase order
-		for _, item := range existingDetails {
-			if item.ID == updatedItem.DetailId {
-				existingItem = &item
-				break
+		if updatedItem.DetailId > 0 {
+			// Find the live slice element by ID (safe even if prior iterations deleted items).
+			for i := range existingSupplierCredit.Details {
+				if existingSupplierCredit.Details[i].ID == updatedItem.DetailId {
+					existingItem = &existingSupplierCredit.Details[i]
+					break
+				}
 			}
 		}
 
@@ -636,8 +635,8 @@ func UpdateSupplierCredit(ctx context.Context, supplierCreditID int, updatedSupp
 		var itemProduct *ProductInterface
 		// If the item doesn't exist, add it to the purchase order
 		if existingItem == nil {
-			fmt.Println("is not existing- ")
 			newItem := SupplierCreditDetail{
+				SupplierCreditId:   existingSupplierCredit.ID,
 				ProductId:          updatedItem.ProductId,
 				ProductType:        updatedItem.ProductType,
 				BatchNumber:        updatedItem.BatchNumber,
@@ -666,7 +665,11 @@ func UpdateSupplierCredit(ctx context.Context, supplierCreditID int, updatedSupp
 			orderSubtotal, totalDetailDiscountAmount, totalDetailTaxAmount, totalExclusiveTaxAmount = updateSupplierCreditDetailTotal(&newItem, *updatedSupplierCredit.IsTaxInclusive, orderSubtotal, totalExclusiveTaxAmount, totalDetailDiscountAmount, totalDetailTaxAmount)
 			newItem.Cogs = decimal.NewFromInt(0)
 
-			// append newly created item to the slice
+			// Persist detail row deterministically (avoid duplicate detail rows on edit).
+			if err := tx.WithContext(ctx).Create(&newItem).Error; err != nil {
+				tx.Rollback()
+				return nil, err
+			}
 			existingSupplierCredit.Details = append(existingSupplierCredit.Details, newItem)
 
 			if itemProduct != nil && (*itemProduct).GetInventoryAccountID() > 0 && existingSupplierCredit.CurrentStatus == SupplierCreditStatusConfirmed {
@@ -762,7 +765,7 @@ func UpdateSupplierCredit(ctx context.Context, supplierCreditID int, updatedSupp
 				orderSubtotal, totalDetailDiscountAmount, totalDetailTaxAmount, totalExclusiveTaxAmount = updateSupplierCreditDetailTotal(existingItem, *updatedSupplierCredit.IsTaxInclusive, orderSubtotal, totalExclusiveTaxAmount, totalDetailDiscountAmount, totalDetailTaxAmount)
 				// existingSupplierCredit.Details = append(existingSupplierCredit.Details, *existingItem)
 
-				if err := tx.WithContext(ctx).Save(&existingItem).Error; err != nil {
+				if err := tx.WithContext(ctx).Save(existingItem).Error; err != nil {
 					tx.Rollback()
 					return nil, err
 				}

@@ -337,6 +337,31 @@ func CreateSupplierCredit(tx *gorm.DB, logger *logrus.Logger, recordId int, reco
 					ReferenceDetailID: supplierCreditDetail.ID,
 					IsOutgoing:        utils.NewTrue(),
 				}
+
+				// Idempotency guard: workflows are at-least-once and can be retried.
+				// Never create duplicate active stock_histories rows for the same supplier credit detail.
+				existing := new(models.StockHistory)
+				findErr := tx.
+					Where("business_id = ? AND reference_type = ? AND reference_id = ? AND reference_detail_id = ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
+						supplierCredit.BusinessId, models.StockReferenceTypeSupplierCredit, supplierCredit.ID, supplierCreditDetail.ID).
+					First(existing).Error
+				if findErr == nil {
+					logger.WithFields(logrus.Fields{
+						"business_id":         supplierCredit.BusinessId,
+						"reference_type":      models.StockReferenceTypeSupplierCredit,
+						"reference_id":        supplierCredit.ID,
+						"reference_detail_id": supplierCreditDetail.ID,
+						"existing_stock_id":   existing.ID,
+					}).Warn("supplier credit stock history already exists; skipping duplicate insert")
+					stockHistories = append(stockHistories, existing)
+					continue
+				}
+				if findErr != gorm.ErrRecordNotFound {
+					tx.Rollback()
+					config.LogError(logger, "SupplierCreditWorkflow.go", "CreateSupplierCredit", "FindExistingStockHistory", stockHistory, findErr)
+					return 0, nil, 0, nil, findErr
+				}
+
 				err = tx.Exec("UPDATE supplier_credit_details SET cogs = 0 WHERE id = ?",
 					stockHistory.ReferenceDetailID).Error
 				if err != nil {
