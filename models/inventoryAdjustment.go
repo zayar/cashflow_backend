@@ -210,13 +210,29 @@ func (input NewInventoryAdjustment) validate(ctx context.Context, businessId str
 			}
 
 			if qtyOnHand.LessThanOrEqual(decimal.Zero) {
-				// If cache says there is stock but ledger sum is zero, it’s a worker/legacy ledger readiness issue.
+				// If cache says there is stock but ledger sum is zero, it's a worker/legacy ledger readiness issue.
+				// Use COALESCE to match the ledger query pattern (handles NULL batch_number consistently).
 				var cacheQty decimal.Decimal
 				_ = db.WithContext(ctx).Model(&StockSummary{}).
 					Select("COALESCE(SUM(current_qty), 0)").
-					Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ?",
+					Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number, '') = ?",
 						businessId, input.WarehouseId, inputDetail.ProductId, inputDetail.ProductType, inputDetail.BatchNumber).
 					Scan(&cacheQty).Error
+				
+				// Debug logging when mismatch detected
+				if debugInventoryAdjustmentValue() {
+					// Check if stock exists in ledger for ANY batch (to diagnose batch mismatch)
+					var anyBatchQty decimal.Decimal
+					_ = db.WithContext(ctx).Raw(`
+						SELECT COALESCE(SUM(qty), 0) AS qty
+						FROM stock_histories
+						WHERE business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ?
+						  AND stock_date <= ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
+					`, businessId, input.WarehouseId, inputDetail.ProductId, inputDetail.ProductType, adjDate).Scan(&anyBatchQty).Error
+					log.Printf("[inv_adj_value.validate] MISMATCH: cache_qty=%s ledger_qty_for_batch=%q=%s ledger_qty_any_batch=%s batch_number=%q",
+						cacheQty.String(), inputDetail.BatchNumber, qtyOnHand.String(), anyBatchQty.String(), inputDetail.BatchNumber)
+				}
+				
 				if cacheQty.GreaterThan(decimal.Zero) {
 					return errors.New("inventory valuation is not ready for this item yet (stock ledger missing). Please wait a moment and try again, or ensure opening stock posting has completed.")
 				}
