@@ -349,6 +349,34 @@ func CreateInvoice(tx *gorm.DB, logger *logrus.Logger, recordId int, recordType 
 				}
 				productInventoryAccounts[productDetail.InventoryAccountId] = productInventoryAmount
 
+				// Idempotency guard: invoice workflows are at-least-once and can be retried.
+				// Never create duplicate active stock_histories rows for the same invoice detail.
+				//
+				// This prevents Inventory Valuation from double-counting invoice qty (e.g. showing -2 for a qty=1 invoice line)
+				// while operational on-hand (stock_summaries) remains correct (updated synchronously on status transition).
+				existing := new(models.StockHistory)
+				findErr := tx.
+					Where("business_id = ? AND reference_type = ? AND reference_id = ? AND reference_detail_id = ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
+						invoice.BusinessId, models.StockReferenceTypeInvoice, invoice.ID, invoiceDetail.ID).
+					First(existing).Error
+				if findErr == nil {
+					// Already posted; reuse existing ledger row so downstream valuation processing can proceed deterministically.
+					logger.WithFields(logrus.Fields{
+						"business_id":         invoice.BusinessId,
+						"reference_type":      models.StockReferenceTypeInvoice,
+						"reference_id":        invoice.ID,
+						"reference_detail_id": invoiceDetail.ID,
+						"existing_stock_id":   existing.ID,
+					}).Warn("invoice stock history already exists; skipping duplicate insert")
+					stockHistories = append(stockHistories, existing)
+					continue
+				}
+				if findErr != nil && findErr != gorm.ErrRecordNotFound {
+					tx.Rollback()
+					config.LogError(logger, "InvoiceWorkflow.go", "CreateInvoice", "FindExistingStockHistory", invoiceDetail, findErr)
+					return 0, nil, 0, nil, findErr
+				}
+
 				stockHistory := models.StockHistory{
 					BusinessId:        invoice.BusinessId,
 					WarehouseId:       invoice.WarehouseId,
