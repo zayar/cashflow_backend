@@ -354,11 +354,24 @@ func CreateInvoice(tx *gorm.DB, logger *logrus.Logger, recordId int, recordType 
 				//
 				// This prevents Inventory Valuation from double-counting invoice qty (e.g. showing -2 for a qty=1 invoice line)
 				// while operational on-hand (stock_summaries) remains correct (updated synchronously on status transition).
+				//
+				// Check by (business_id, reference_type, reference_id, reference_detail_id) if detail ID is set,
+				// otherwise fall back to (business_id, reference_type, reference_id, product_id, product_type, batch_number, warehouse_id, stock_date).
 				existing := new(models.StockHistory)
-				findErr := tx.
-					Where("business_id = ? AND reference_type = ? AND reference_id = ? AND reference_detail_id = ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
-						invoice.BusinessId, models.StockReferenceTypeInvoice, invoice.ID, invoiceDetail.ID).
-					First(existing).Error
+				var findErr error
+				if invoiceDetail.ID > 0 {
+					findErr = tx.
+						Where("business_id = ? AND reference_type = ? AND reference_id = ? AND reference_detail_id = ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
+							invoice.BusinessId, models.StockReferenceTypeInvoice, invoice.ID, invoiceDetail.ID).
+						First(existing).Error
+				} else {
+					// Fallback: if detail ID is not set, check by product/warehouse/date combination.
+					// This handles edge cases where detail ID might be 0 (shouldn't happen, but defensive).
+					findErr = tx.
+						Where("business_id = ? AND reference_type = ? AND reference_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND warehouse_id = ? AND DATE(stock_date) = DATE(?) AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
+							invoice.BusinessId, models.StockReferenceTypeInvoice, invoice.ID, invoiceDetail.ProductId, invoiceDetail.ProductType, invoiceDetail.BatchNumber, invoice.WarehouseId, stockDate).
+						First(existing).Error
+				}
 				if findErr == nil {
 					// Already posted; reuse existing ledger row so downstream valuation processing can proceed deterministically.
 					logger.WithFields(logrus.Fields{
