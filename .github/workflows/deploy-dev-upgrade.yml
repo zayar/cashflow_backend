@@ -23,6 +23,10 @@ jobs:
       REDIS_ADDRESS: ${{ secrets.REDIS_ADDRESS }}
       # Optional: only needed if REDIS_ADDRESS is private IP (10.x/172.16-31/192.168)
       VPC_CONNECTOR: ${{ secrets.VPC_CONNECTOR }}
+      STORAGE_PROVIDER: ${{ vars.STORAGE_PROVIDER }}
+      GCS_BUCKET: ${{ vars.GCS_BUCKET }}
+      GCS_URL: ${{ vars.GCS_URL }}
+      STORAGE_ACCESS_BASE_URL: ${{ vars.STORAGE_ACCESS_BASE_URL }}
       # Optional overrides (defaults in script are fine)
       # API_SERVICE_NAME: api-dev-upgrade-v2
       # WORKER_SERVICE_NAME: cashflow-backend-dev-upgrade
@@ -30,6 +34,7 @@ jobs:
       # DB_NAME_2: pitibooks
       # PUBSUB_TOPIC: CashflowAccountingDevUpgrade
       # PUBSUB_SUBSCRIPTION: CashflowAccountingDevUpgradeSub
+      
     steps:
       - name: Checkout
         uses: actions/checkout@v4
