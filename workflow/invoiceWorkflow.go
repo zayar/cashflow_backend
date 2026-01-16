@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"encoding/json"
+	"errors"
 	"slices"
 
 	"github.com/mmdatafocus/books_backend/config"
@@ -540,8 +541,15 @@ func DeleteInvoice(tx *gorm.DB, logger *logrus.Logger, recordId int, recordType 
 	foreignCurrencyId := oldInvoice.CurrencyId
 	accountJournal, _, accountIds, err := GetExistingAccountJournal(tx, oldInvoice.ID, models.AccountReferenceTypeInvoice)
 	if err != nil {
-		config.LogError(logger, "InvoiceWorkflow.go", "DeleteInvoice", "GetExistingAccountJournal", oldInvoice, err)
-		return 0, nil, 0, nil, err
+		// If no active journal exists, continue with stock reversal and allow re-posting.
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			config.LogError(logger, "InvoiceWorkflow.go", "DeleteInvoice", "GetExistingAccountJournalNotFound", oldInvoice, err)
+			accountJournal = nil
+			accountIds = []int{}
+		} else {
+			config.LogError(logger, "InvoiceWorkflow.go", "DeleteInvoice", "GetExistingAccountJournal", oldInvoice, err)
+			return 0, nil, 0, nil, err
+		}
 	}
 
 	var stockHistories []*models.StockHistory
@@ -579,10 +587,13 @@ func DeleteInvoice(tx *gorm.DB, logger *logrus.Logger, recordId int, recordType 
 	// }
 
 	// Phase 1: do not delete posted journals; create a reversal journal instead.
-	reversalID, err := ReverseAccountJournal(tx, accountJournal, ReversalReasonSalesInvoiceVoidUpdate)
-	if err != nil {
-		config.LogError(logger, "InvoiceWorkflow.go", "DeleteInvoice", "ReverseAccountJournal", accountJournal, err)
-		return 0, nil, 0, nil, err
+	reversalID := 0
+	if accountJournal != nil {
+		reversalID, err = ReverseAccountJournal(tx, accountJournal, ReversalReasonSalesInvoiceVoidUpdate)
+		if err != nil {
+			config.LogError(logger, "InvoiceWorkflow.go", "DeleteInvoice", "ReverseAccountJournal", accountJournal, err)
+			return 0, nil, 0, nil, err
+		}
 	}
 
 	return reversalID, accountIds, foreignCurrencyId, stockReversals, nil
