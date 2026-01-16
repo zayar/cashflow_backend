@@ -7,12 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
+	"path"
 	"path/filepath"
-	"strings"
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/disintegration/imaging"
+	"github.com/google/uuid"
 	"github.com/mmdatafocus/books_backend/config"
 	"github.com/mmdatafocus/books_backend/utils"
 	"gorm.io/gorm"
@@ -101,10 +101,9 @@ func RemoveImage(ctx context.Context, fullUrl string) (*UploadResponse, error) {
 	if err := utils.DeleteImageFromGCS(ctx, objectName); err != nil {
 		return nil, err
 	}
-	storagePath := strings.Split(objectName, "/")[0]
-	filename := strings.Split(objectName, "/")[1]
-	// remove thumbnail
-	thumbnailObjectName := filepath.Join(storagePath, "thumbnails", filename)
+	dir := path.Dir(objectName)
+	filename := path.Base(objectName)
+	thumbnailObjectName := path.Join(dir, "thumbnails", filename)
 	// if err := utils.DeleteImageFromSpaces(thumbnailObjectName); err != nil {
 	if err := utils.DeleteImageFromGCS(ctx, thumbnailObjectName); err != nil {
 		return nil, err
@@ -153,15 +152,13 @@ func UploadImage(ctx context.Context, file graphql.Upload) (string, string, erro
 	// Encode the file data to base64
 	imageData := base64.StdEncoding.EncodeToString(data)
 
-	// Extract the file extension
 	ext := filepath.Ext(file.Filename)
 	if ext == "" {
 		return "", "", errors.New("file has no extension")
 	}
-	storagePath := "products/"
-	uniqueFilename := businessId + " " + utils.GenerateUniqueFilename() + ext
-	originalImageObjectURL := filepath.Join(storagePath, uniqueFilename)
-	thumbnailImageObjectURL := filepath.Join(storagePath, "thumbnails", uniqueFilename)
+	uniqueFilename := uuid.New().String() + ext
+	originalImageObjectURL := path.Join(businessId, "products", uniqueFilename)
+	thumbnailImageObjectURL := path.Join(businessId, "products", "thumbnails", uniqueFilename)
 
 	// Save the original image to Minio
 	// err = utils.SaveImageToSpaces(originalImageObjectURL, imageData)
@@ -194,33 +191,33 @@ func UploadImage(ctx context.Context, file graphql.Upload) (string, string, erro
 }
 
 func getCloudURL(objectName string) string {
-	// return "https://" + os.Getenv("SP_BUCKET") + "." + os.Getenv("SP_URL") + "/" + objectName
-	return "https://" + os.Getenv("GCS_URL") + "/" + os.Getenv("GCS_BUCKET") + "/" + objectName
+	return utils.BuildObjectAccessURL(objectName)
 }
 
 func extractObjectName(cloudUrl string) string {
-	// baseUrl := "https://" + os.Getenv("SP_BUCKET") + "." + os.Getenv("SP_URL") + "/"
-	baseUrl := "https://" + os.Getenv("GCS_URL") + "/" + os.Getenv("GCS_BUCKET") + "/"
-	objectName, found := strings.CutPrefix(cloudUrl, baseUrl)
-	if !found {
-		return ""
-	}
-	return objectName
+	return utils.ExtractObjectKeyFromURL(cloudUrl)
 }
 
 func UploadFile(ctx context.Context, file graphql.Upload) (*UploadResponse, error) {
+	businessId, ok := utils.GetBusinessIdFromContext(ctx)
+	if !ok || businessId == "" {
+		return nil, errors.New("business id is required")
+	}
 
-	objectName := "documents/" + file.Filename
+	ext := filepath.Ext(file.Filename)
+	if ext == "" {
+		return nil, errors.New("file has no extension")
+	}
+	objectName := path.Join(businessId, "documents", uuid.New().String()+ext)
 
-	// Upload file to DigitalOcean Space
+	// Upload file to storage provider
 	// err := utils.UploadFileToSpace(objectName, file.File)
 	err := utils.UploadFileToGCS(ctx, objectName, file.File)
 	if err != nil {
-		return nil, fmt.Errorf("failed to upload file to DigitalOcean Space: %v", err)
+		return nil, fmt.Errorf("failed to upload file to storage provider: %v", err)
 	}
 
-	// fileURL := "https://" + os.Getenv("SP_BUCKET") + "." + os.Getenv("SP_URL") + "/" + objectName
-	fileURL := "https://" + os.Getenv("GCS_URL") + "/" + os.Getenv("GCS_BUCKET") + "/" + objectName
+	fileURL := getCloudURL(objectName)
 
 	response := &UploadResponse{
 		ImageUrl:     fileURL,

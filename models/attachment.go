@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
 	"path/filepath"
 
 	"github.com/99designs/gqlgen/graphql"
+	"github.com/google/uuid"
 	"github.com/mmdatafocus/books_backend/config"
 	"github.com/mmdatafocus/books_backend/utils"
 )
@@ -69,19 +71,46 @@ func CreateAttachment(ctx context.Context, file graphql.Upload, referenceType st
 	if ext == "" {
 		return nil, errors.New("file has no extension")
 	}
-	objectURL := filepath.Join("products/", businessId+" "+utils.GenerateUniqueFilename()+ext)
+	objectURL := path.Join(businessId, referenceType, uuid.New().String()+ext)
 
-	// Upload file to DigitalOcean Space
+	// Upload file to storage provider
 	// err := utils.UploadFileToSpace(objectName, file.File)
 	err := utils.UploadFileToGCS(ctx, objectURL, file.File)
 	if err != nil {
-		return nil, fmt.Errorf("failed to upload file to DigitalOcean Space: %v", err)
+		return nil, fmt.Errorf("failed to upload file to storage provider: %v", err)
 	}
 
 	// fileURL := "https://" + os.Getenv("GCS_URL") + "/" + os.Getenv("GCS_BUCKET") + "/" + objectURL
 	fileURL := getCloudURL(objectURL)
 	var result Document = Document{
 		DocumentUrl:   fileURL,
+		ReferenceType: referenceType,
+		ReferenceID:   referenceId,
+	}
+	db := config.GetDB()
+	if err := db.WithContext(ctx).Create(&result).Error; err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
+func CreateAttachmentFromURL(ctx context.Context, documentURL string, referenceType string, referenceId int) (*Document, error) {
+	businessId, ok := utils.GetBusinessIdFromContext(ctx)
+	if !ok || businessId == "" {
+		return nil, errors.New("business id is required")
+	}
+
+	if err := validateReferenceType(ctx, businessId, referenceType, referenceId); err != nil {
+		return nil, err
+	}
+
+	if err := utils.CheckImageExistInGCS(documentURL); err != nil {
+		return nil, err
+	}
+
+	var result Document = Document{
+		DocumentUrl:   documentURL,
 		ReferenceType: referenceType,
 		ReferenceID:   referenceId,
 	}

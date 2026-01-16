@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"slices"
 	"strings"
 	"time"
@@ -958,10 +957,9 @@ func uploadFile(ctx context.Context, fileName string, file graphql.Upload) (stri
 	objectName := "importProducts/" + fileName
 	err := utils.UploadFileToGCS(ctx, objectName, file.File)
 	if err != nil {
-		return "", fmt.Errorf("failed to upload file to DigitalOcean Space: %v", err)
+		return "", fmt.Errorf("failed to upload file to storage provider: %v", err)
 	}
-	fileURL := "https://" + os.Getenv("GCS_URL") + "/" + os.Getenv("GCS_BUCKET") + "/" + objectName
-	return fileURL, nil
+	return getCloudURL(objectName), nil
 }
 
 func readExcelFileFromURL(fileURL string) (*excelize.File, error) {

@@ -818,6 +818,9 @@ func main() {
 	r.Use(gin.Recovery())
 	r.POST("/query", graphqlHandler())
 	r.GET("/", playgroundHandler())
+	r.POST("/api/uploads/sign", signUploadHandler())
+	r.POST("/api/uploads/complete", completeUploadHandler())
+	r.GET("/api/uploads/object", uploadObjectHandler())
 	r.POST("/pubsub", accountingPubSubHandler())
 	// Ops tooling (admin only): replay outbox messages that were marked DEAD/FAILED.
 	r.POST("/internal/ops/outbox/replay", outboxReplayHandler())

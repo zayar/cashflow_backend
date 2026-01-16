@@ -34,6 +34,11 @@ func getGoogleClient(ctx context.Context) (*storage.Client, error) {
 	return client, nil
 }
 
+// GetGCSClient exposes the shared Google Cloud Storage client.
+func GetGCSClient(ctx context.Context) (*storage.Client, error) {
+	return getGoogleClient(ctx)
+}
+
 func SaveImageToGCS(ctx context.Context, objectName, imageData string) error {
 	// Decode the base64 data
 	decodedData, err := base64.StdEncoding.DecodeString(imageData)
@@ -133,6 +138,30 @@ func UploadFileToGCS(ctx context.Context, objectName string, fileContent io.Read
 	return nil
 }
 
+func UploadBytesToGCS(ctx context.Context, objectName string, data []byte, contentType string) error {
+	client, err := getGoogleClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
+	bucketName := os.Getenv("GCS_BUCKET")
+	if bucketName == "" {
+		return errors.New("GCS_BUCKET is required")
+	}
+
+	wc := client.Bucket(bucketName).Object(objectName).NewWriter(ctx)
+	wc.ContentType = contentType
+
+	if _, err := wc.Write(data); err != nil {
+		return fmt.Errorf("failed to upload bytes to Google Cloud Storage: %v", err)
+	}
+	if err := wc.Close(); err != nil {
+		return fmt.Errorf("failed to close writer: %v", err)
+	}
+	return nil
+}
+
 // DeleteImageFromGCS deletes an image from Google Cloud Storage
 func DeleteImageFromGCS(ctx context.Context, objectName string) error {
 	// Get the Google Cloud Storage client
@@ -184,6 +213,17 @@ func ObjectExistsInGCS(ctx context.Context, objectName string) (bool, error) {
 
 // CheckImageExistInCloud checks if an image exists on the internet
 func CheckImageExistInGCS(imageURL string) error {
+	if objectKey := ExtractObjectKeyFromURL(imageURL); objectKey != "" {
+		ok, err := ObjectExistsInGCS(context.Background(), objectKey)
+		if err != nil {
+			return err
+		}
+		if ok {
+			return nil
+		}
+		return errors.New("image does not exist")
+	}
+
 	resp, err := http.Head(imageURL)
 	if err != nil {
 		return errors.New("invalid image url")
