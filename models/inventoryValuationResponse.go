@@ -3,6 +3,7 @@ package models
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -431,6 +432,30 @@ LEFT JOIN AllProductUnits pu
 		"batchNumber": batchNumber,
 	}).Scan(&results).Error; err != nil {
 		return nil, err
+	}
+
+	// Invariant guardrail: inventory value must not be negative when on-hand is positive.
+	// If this happens, the valuation ledger is inconsistent (partial postings, duplicate outgoing, or missing incoming costs).
+	for _, r := range results {
+		if r == nil {
+			continue
+		}
+		if r.StockOnHand.GreaterThan(decimal.Zero) && r.AssetValue.IsNegative() {
+			if debugInventoryValuation() {
+				logger := config.GetLogger()
+				logger.WithFields(map[string]interface{}{
+					"correlation_id": cid,
+					"business_id":    businessId,
+					"warehouse_id":   warehouseId,
+					"product_id":     r.ProductId,
+					"product_type":   string(r.ProductType),
+					"stock_on_hand":  r.StockOnHand.String(),
+					"asset_value":    r.AssetValue.String(),
+					"unit_cost":      r.UnitCost.String(),
+				}).Error("closing_inventory: valuation inconsistent (negative value with positive qty)")
+			}
+			return nil, fmt.Errorf("inventory valuation inconsistent for this item (negative value with positive on-hand). Please run Reconcile Accounting and try again. correlation_id=%s", cid)
+		}
 	}
 
 	if debugInventoryValuation() {

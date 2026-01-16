@@ -317,3 +317,130 @@ func TestInventoryAdjustmentValue_ZeroOnHand_StillErrors(t *testing.T) {
 	}
 }
 
+// Regression: eliminate nondeterminism where stock_summaries shows on-hand but stock_histories isn't ready yet
+// because Product Opening Stock outbox hasn't been processed.
+func TestIVAVReadiness_OpeningStockOutboxRace_BecomesDeterministic(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("INTEGRATION_TESTS")) == "" {
+		t.Skip("set INTEGRATION_TESTS=1 to run integration tests (requires docker)")
+	}
+
+	ctx := context.Background()
+
+	redisName, redisPort := startRedisContainer(t)
+	t.Cleanup(func() { _ = dockerRmForce(redisName) })
+
+	mysqlName, mysqlPort := startMySQLContainer(t)
+	t.Cleanup(func() { _ = dockerRmForce(mysqlName) })
+
+	t.Setenv("REDIS_ADDRESS", fmt.Sprintf("127.0.0.1:%s", redisPort))
+	t.Setenv("DB_USER", "root")
+	t.Setenv("DB_PASSWORD", "testpw")
+	t.Setenv("DB_HOST", "127.0.0.1")
+	t.Setenv("DB_PORT", mysqlPort)
+	t.Setenv("DB_NAME_2", "pitibooks_test")
+	t.Setenv("STOCK_COMMANDS_DOCS", "")
+
+	config.ConnectDatabaseWithRetry()
+	config.ConnectRedisWithRetry()
+	models.MigrateTable()
+
+	ctx = utils.SetUserIdInContext(ctx, 1)
+	ctx = utils.SetUserNameInContext(ctx, "Test")
+	ctx = utils.SetUsernameInContext(ctx, "test@local")
+
+	biz, err := models.CreateBusiness(ctx, &models.NewBusiness{
+		Name:  "Test Biz",
+		Email: "owner@test.local",
+	})
+	if err != nil {
+		t.Fatalf("CreateBusiness: %v", err)
+	}
+	businessID := biz.ID.String()
+	ctx = utils.SetBusinessIdInContext(ctx, businessID)
+
+	db := config.GetDB()
+	var primary models.Warehouse
+	if err := db.WithContext(ctx).Where("business_id = ? AND name = ?", businessID, "Primary Warehouse").First(&primary).Error; err != nil {
+		t.Fatalf("fetch primary warehouse: %v", err)
+	}
+
+	reason, err := models.CreateReason(ctx, &models.NewReason{Name: "Damage"})
+	if err != nil {
+		t.Fatalf("CreateReason: %v", err)
+	}
+	unit, err := models.CreateProductUnit(ctx, &models.NewProductUnit{Name: "Pcs", Abbreviation: "pc", Precision: models.PrecisionZero})
+	if err != nil {
+		t.Fatalf("CreateProductUnit: %v", err)
+	}
+	sysAccounts, err := models.GetSystemAccounts(businessID)
+	if err != nil {
+		t.Fatalf("GetSystemAccounts: %v", err)
+	}
+	invAcc := sysAccounts[models.AccountCodeInventoryAsset]
+	salesAcc := sysAccounts[models.AccountCodeSales]
+	cogsAcc := sysAccounts[models.AccountCodeCostOfGoodsSold]
+
+	// Create product with opening stock. This updates stock_summaries immediately and publishes outbox,
+	// but we intentionally do NOT process the opening stock workflow yet (simulate worker lag).
+	p, err := models.CreateProduct(ctx, &models.NewProduct{
+		Name:               "RaceItem",
+		Sku:                "RACE-001",
+		Barcode:            "RACE-001",
+		UnitId:             unit.ID,
+		SalesAccountId:     salesAcc,
+		PurchaseAccountId:  cogsAcc,
+		InventoryAccountId: invAcc,
+		IsBatchTracking:    utils.NewFalse(),
+		OpeningStocks: []models.NewOpeningStock{
+			{WarehouseId: primary.ID, Qty: decimal.NewFromInt(9), UnitValue: decimal.NewFromInt(100)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateProduct: %v", err)
+	}
+
+	adjDate := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+	input := &models.NewInventoryAdjustment{
+		ReferenceNumber: "IVAV-RACE",
+		AdjustmentType:  models.InventoryAdjustmentTypeValue,
+		AdjustmentDate:  adjDate,
+		AccountId:       cogsAcc,
+		BranchId:        biz.PrimaryBranchId,
+		WarehouseId:     primary.ID,
+		CurrentStatus:   models.InventoryAdjustmentStatusDraft,
+		ReasonId:        reason.ID,
+		Description:     "Revalue",
+		Details: []models.NewInventoryAdjustmentDetail{
+			{
+				ProductId:     p.ID,
+				ProductType:   models.ProductTypeSingle,
+				BatchNumber:   "",
+				Name:          "RaceItem",
+				AdjustedValue: decimal.NewFromInt(100), // new unit cost
+				CostPrice:     decimal.NewFromInt(100),
+			},
+		},
+	}
+
+	// Without processing opening stock outbox, validation should deterministically fail with "ledger missing".
+	if err := models.ValidateInventoryAdjustmentInput(ctx, input); err == nil {
+		t.Fatalf("expected ledger-missing validation error before processing opening stock outbox; got nil")
+	}
+
+	// Now process outbox synchronously via readiness helper (the same thing GraphQL mutation does).
+	logger := logrus.New()
+	didWork, err := workflow.EnsureIVAVPrereqLedgerReady(ctx, logger, businessID, primary.ID, p.ID, models.ProductTypeSingle, "", adjDate)
+	if err != nil {
+		t.Fatalf("EnsureIVAVPrereqLedgerReady: %v", err)
+	}
+	if !didWork {
+		t.Fatalf("expected readiness helper to process opening stock outbox (didWork=false)")
+	}
+
+	// After readiness, repeating validation should be stable (no nondeterminism).
+	for i := 0; i < 10; i++ {
+		if err := models.ValidateInventoryAdjustmentInput(ctx, input); err != nil {
+			t.Fatalf("expected validation OK after readiness (iter=%d): %v", i, err)
+		}
+	}
+}

@@ -218,14 +218,33 @@ func (input NewInventoryAdjustment) validate(ctx context.Context, businessId str
 			}
 
 			if qtyOnHand.LessThanOrEqual(decimal.Zero) {
-				// If cache says there is stock but ledger sum is zero, it's a worker/legacy ledger readiness issue.
-				// Use COALESCE to match the ledger query pattern (handles NULL batch_number consistently).
-				var cacheQty decimal.Decimal
-				_ = db.WithContext(ctx).Model(&StockSummary{}).
-					Select("COALESCE(SUM(current_qty), 0)").
-					Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number, '') = ?",
-						businessId, input.WarehouseId, inputDetail.ProductId, inputDetail.ProductType, inputDetail.BatchNumber).
-					Scan(&cacheQty).Error
+				// IMPORTANT:
+				// stock_summaries.current_qty is "current as-of now", not "as-of adjustment date".
+				// For Value Adjustments we must compare as-of balances, otherwise historical dates will
+				// incorrectly produce "ledger missing" even though the true as-of on-hand is 0.
+				//
+				// Use stock_summary_daily_balances to compute cache on-hand as-of the adjustment date.
+				var cacheQtyAsOf decimal.Decimal
+				_ = db.WithContext(ctx).Raw(`
+					SELECT
+					  COALESCE(SUM(
+					    opening_qty
+					    + received_qty
+					    + adjusted_qty_in
+					    + transfer_qty_in
+					    - sale_qty
+					    - ABS(adjusted_qty_out)
+					    - ABS(transfer_qty_out)
+					  ), 0) AS qty
+					FROM stock_summary_daily_balances
+					WHERE business_id = ?
+					  AND warehouse_id = ?
+					  AND product_id = ?
+					  AND product_type = ?
+					  AND COALESCE(batch_number,'') = ?
+					  AND transaction_date < ?
+				`, businessId, input.WarehouseId, inputDetail.ProductId, inputDetail.ProductType, inputDetail.BatchNumber, adjDateExclusiveEnd).
+					Scan(&cacheQtyAsOf).Error
 				
 				// Debug logging when mismatch detected
 				if debugInventoryAdjustmentValue() {
@@ -239,10 +258,10 @@ func (input NewInventoryAdjustment) validate(ctx context.Context, businessId str
 						  AND stock_date < ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
 					`, businessId, input.WarehouseId, inputDetail.ProductId, inputDetail.ProductType, adjDateExclusiveEnd).Scan(&anyBatchQty).Error
 					log.Printf("[inv_adj_value.validate] correlation_id=%s MISMATCH: cache_qty=%s ledger_qty_for_batch=%q=%s ledger_qty_any_batch=%s batch_number=%q",
-						cid, cacheQty.String(), inputDetail.BatchNumber, qtyOnHand.String(), anyBatchQty.String(), inputDetail.BatchNumber)
+						cid, cacheQtyAsOf.String(), inputDetail.BatchNumber, qtyOnHand.String(), anyBatchQty.String(), inputDetail.BatchNumber)
 				}
 				
-				if cacheQty.GreaterThan(decimal.Zero) {
+				if cacheQtyAsOf.GreaterThan(decimal.Zero) {
 					return errors.New("inventory valuation is not ready for this item yet (stock ledger missing). Please wait a moment and try again, or ensure opening stock posting has completed.")
 				}
 				return errors.New("cannot adjust inventory value when stock on hand is zero")
