@@ -122,21 +122,6 @@ FROM
         AND p.product_type = oh.product_type
     LEFT JOIN OpeningFallback ofb ON p.product_id = ofb.product_id
         AND p.product_type = ofb.product_type
-WHERE
-    (
-        COALESCE(s.stock_on_hand, 0)
-        + CASE
-            WHEN oh.product_id IS NULL THEN COALESCE(ofb.opening_qty, 0)
-            ELSE 0
-          END
-    ) != 0
-    OR (
-        COALESCE(s.asset_value, 0)
-        + CASE
-            WHEN oh.product_id IS NULL THEN COALESCE(ofb.opening_asset_value, 0)
-            ELSE 0
-          END
-    ) != 0
 ORDER BY p.product_name;
 `
 
@@ -236,21 +221,6 @@ FROM
         AND p.product_type = oh.product_type
     LEFT JOIN OpeningFallback ofb ON p.product_id = ofb.product_id
         AND p.product_type = ofb.product_type
-WHERE
-    (
-        COALESCE(s.stock_on_hand, 0)
-        + CASE
-            WHEN oh.product_id IS NULL THEN COALESCE(ofb.opening_qty, 0)
-            ELSE 0
-          END
-    ) != 0
-    OR (
-        COALESCE(s.asset_value, 0)
-        + CASE
-            WHEN oh.product_id IS NULL THEN COALESCE(ofb.opening_asset_value, 0)
-            ELSE 0
-          END
-    ) != 0
 ORDER BY p.product_name;
 `
 
