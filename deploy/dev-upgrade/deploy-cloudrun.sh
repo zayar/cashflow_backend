@@ -61,6 +61,17 @@ fi
 # Other
 TOKEN_HOUR_LIFESPAN="${TOKEN_HOUR_LIFESPAN:-24}"
 GO_ENV="${GO_ENV:-dev-upgrade}"
+STORAGE_PROVIDER="${STORAGE_PROVIDER:-gcs}"
+GCS_BUCKET="${GCS_BUCKET:-}"
+GCS_URL="${GCS_URL:-storage.googleapis.com}"
+STORAGE_ACCESS_BASE_URL="${STORAGE_ACCESS_BASE_URL:-}"
+GCS_SIGNER_EMAIL="${GCS_SIGNER_EMAIL:-}"
+GCS_SIGNER_PRIVATE_KEY="${GCS_SIGNER_PRIVATE_KEY:-}"
+
+if [[ "$STORAGE_PROVIDER" == "gcs" && -z "$GCS_BUCKET" ]]; then
+  echo "Missing GCS_BUCKET for STORAGE_PROVIDER=gcs"
+  exit 1
+fi
 
 echo "Deploying $SERVICE_NAME to Cloud Run ($PROJECT_ID / $REGION)"
 
@@ -84,7 +95,20 @@ DEPLOY_ARGS=(
   --set-env-vars "PUBSUB_PROJECT_ID=$PROJECT_ID"
   --set-env-vars "PUBSUB_TOPIC=$PUBSUB_TOPIC"
   --set-env-vars "PUBSUB_SUBSCRIPTION=$PUBSUB_SUBSCRIPTION"
+  --set-env-vars "STORAGE_PROVIDER=$STORAGE_PROVIDER"
+  --set-env-vars "GCS_BUCKET=$GCS_BUCKET"
+  --set-env-vars "GCS_URL=$GCS_URL"
 )
+
+if [[ -n "$STORAGE_ACCESS_BASE_URL" ]]; then
+  DEPLOY_ARGS+=(--set-env-vars "STORAGE_ACCESS_BASE_URL=$STORAGE_ACCESS_BASE_URL")
+fi
+if [[ -n "$GCS_SIGNER_EMAIL" ]]; then
+  DEPLOY_ARGS+=(--set-env-vars "GCS_SIGNER_EMAIL=$GCS_SIGNER_EMAIL")
+fi
+if [[ -n "$GCS_SIGNER_PRIVATE_KEY" ]]; then
+  DEPLOY_ARGS+=(--set-env-vars "GCS_SIGNER_PRIVATE_KEY=$GCS_SIGNER_PRIVATE_KEY")
+fi
 
 if [[ -n "$VPC_CONNECTOR" ]]; then
   # IMPORTANT:

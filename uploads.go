@@ -141,7 +141,11 @@ func signUploadHandler() gin.HandlerFunc {
 		signed, err := utils.SignUpload(c.Request.Context(), objectKey, req.MimeType, 15*time.Minute)
 		if err != nil {
 			logUploadError(logger, err, utils.GetStorageProvider(), requestID)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to sign upload"})
+			message := "failed to sign upload"
+			if !strings.EqualFold(strings.TrimSpace(os.Getenv("GO_ENV")), "production") {
+				message = fmt.Sprintf("failed to sign upload: %v", err)
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": message})
 			return
 		}
 
