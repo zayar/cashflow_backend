@@ -1260,7 +1260,28 @@ func ProcessValueAdjustmentStocks(tx *gorm.DB, logger *logrus.Logger, stockHisto
 
 		lastCumulativeIncomingQty = lastCumulativeIncomingQty.Sub(stockHistory.Qty)
 
-		if lastCumulativeIncomingQty.LessThan(maxCumulativeOutgoingQty) {
+		shouldRecalc := lastCumulativeIncomingQty.LessThan(maxCumulativeOutgoingQty)
+		if !shouldRecalc {
+			// Backdated incoming stock can change FIFO/COGS for outgoing rows that are already posted
+			// on or after this stock_date. Recalculate whenever such outgoing rows exist.
+			var outgoingCount int64
+			err = tx.Model(&models.StockHistory{}).
+				Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ?",
+					stockHistory.BusinessId, stockHistory.WarehouseId, stockHistory.ProductId, stockHistory.ProductType, stockHistory.BatchNumber).
+				Where("is_outgoing = 1").
+				Where("stock_date >= ?", stockHistory.StockDate).
+				Where("is_reversal = 0 AND reversed_by_stock_history_id IS NULL").
+				Count(&outgoingCount).Error
+			if err != nil {
+				config.LogError(logger, "MainWorkflow.go", "ProcessIncomingStocks", "CountOutgoingAfterIncomingDate", stockHistory, err)
+				return accountIds, err
+			}
+			if outgoingCount > 0 {
+				shouldRecalc = true
+			}
+		}
+
+		if shouldRecalc {
 			remainingIncomingStockHistories, err := GetRemainingStockHistoriesByDate(tx, stockHistory.WarehouseId, stockHistory.ProductId, string(stockHistory.ProductType), stockHistory.BatchNumber, utils.NewFalse(), stockHistory.StockDate)
 			if err != nil {
 				config.LogError(logger, "MainWorkflow.go", "ProcessIncomingStocks", "GetRemainingStockHistoriesByDate", stockHistory, err)
