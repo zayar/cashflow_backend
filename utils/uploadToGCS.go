@@ -46,6 +46,9 @@ func SaveImageToGCS(ctx context.Context, objectName, imageData string) error {
 		return err
 	}
 	bucketName := os.Getenv("GCS_BUCKET")
+	if bucketName == "" {
+		return errors.New("GCS_BUCKET is required")
+	}
 
 	// Get the Google Cloud Storage client
 	client, err := getGoogleClient(ctx)
@@ -53,6 +56,10 @@ func SaveImageToGCS(ctx context.Context, objectName, imageData string) error {
 		return err
 	}
 	defer client.Close()
+
+	if _, err := client.Bucket(bucketName).Attrs(ctx); err != nil {
+		return fmt.Errorf("gcs bucket %q not found or not accessible: %v", bucketName, err)
+	}
 
 	// Upload the decoded image data to the specified object name in your GCS bucket
 	contentType := "image/jpeg"
@@ -119,6 +126,13 @@ func UploadFileToGCS(ctx context.Context, objectName string, fileContent io.Read
 	defer client.Close()
 
 	bucketName := os.Getenv("GCS_BUCKET")
+	if bucketName == "" {
+		return errors.New("GCS_BUCKET is required")
+	}
+
+	if _, err := client.Bucket(bucketName).Attrs(ctx); err != nil {
+		return fmt.Errorf("gcs bucket %q not found or not accessible: %v", bucketName, err)
+	}
 
 	// Upload the file to Google Cloud Storage
 	wc := client.Bucket(bucketName).Object(objectName).NewWriter(ctx)
@@ -146,6 +160,9 @@ func UploadBytesToGCS(ctx context.Context, objectName string, data []byte, conte
 	defer client.Close()
 
 	bucketName := os.Getenv("GCS_BUCKET")
+	if bucketName == "" {
+		return errors.New("GCS_BUCKET is required")
+	}
 	if bucketName == "" {
 		return errors.New("GCS_BUCKET is required")
 	}
