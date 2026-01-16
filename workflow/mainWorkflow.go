@@ -758,6 +758,47 @@ func calculateCogs(tx *gorm.DB, logger *logrus.Logger, productDetail ProductDeta
 						"opening_stock_base_unit_value": unitValue.String(),
 					}).Info("Fallback to opening stock base_unit_value because PurchasePrice is 0 and no incoming stock histories found")
 				}
+				if unitValue.IsZero() {
+					type openingFallback struct {
+						TotalQty   decimal.Decimal `gorm:"column:total_qty"`
+						TotalValue decimal.Decimal `gorm:"column:total_value"`
+					}
+					var fallback openingFallback
+					if outStock.ProductType == models.ProductTypeSingle {
+						err = tx.Raw(`
+							SELECT
+								COALESCE(SUM(os.qty), 0) AS total_qty,
+								COALESCE(SUM(os.qty * os.unit_value), 0) AS total_value
+							FROM opening_stocks os
+							INNER JOIN products p ON p.id = os.product_id AND p.business_id = ?
+							WHERE os.product_id = ? AND os.product_type = ? AND os.warehouse_id = ?
+						`, outStock.BusinessId, outStock.ProductId, outStock.ProductType, outStock.WarehouseId).Scan(&fallback).Error
+					} else if outStock.ProductType == models.ProductTypeVariant {
+						err = tx.Raw(`
+							SELECT
+								COALESCE(SUM(os.qty), 0) AS total_qty,
+								COALESCE(SUM(os.qty * os.unit_value), 0) AS total_value
+							FROM opening_stocks os
+							INNER JOIN product_variants pv ON pv.id = os.product_id AND pv.business_id = ?
+							WHERE os.product_id = ? AND os.product_type = ? AND os.warehouse_id = ?
+						`, outStock.BusinessId, outStock.ProductId, outStock.ProductType, outStock.WarehouseId).Scan(&fallback).Error
+					}
+					if err != nil {
+						config.LogError(logger, "MainWorkflow.go", "CalculateCogs", "OpeningStocksFallback", outStock, err)
+						return accountIds, err
+					}
+					if !fallback.TotalQty.IsZero() {
+						unitValue = fallback.TotalValue.Div(fallback.TotalQty)
+						if logger != nil {
+							logger.WithFields(logrus.Fields{
+								"function":                      "CalculateCogs",
+								"product_id":                    outStock.ProductId,
+								"warehouse_id":                  outStock.WarehouseId,
+								"opening_stocks_base_unit_value": unitValue.String(),
+							}).Info("Fallback to opening_stocks unit_value because PurchasePrice is 0 and no incoming stock histories found")
+						}
+					}
+				}
 			}
 			if existing, found := uniqueStocks[fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d", outStock.WarehouseId, outStock.ProductId, outStock.ProductType, outStock.BatchNumber, outStock.ReferenceID, outStock.ReferenceType, outStock.ReferenceDetailID)]; found {
 				existing.TotalQty = existing.TotalQty.Add(processQty)

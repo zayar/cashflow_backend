@@ -286,6 +286,380 @@ func TestInventoryValuation_DoesNotDoubleCountInvoiceOnWorkflowRetry(t *testing.
 	}
 }
 
+// Inventory valuation should reflect ONLY stock movements (Bills, Invoices, Adjustments, Transfers).
+// Purchase Orders should not affect stock until they are billed/received.
+func TestInventoryValuation_PurchaseOrdersDoNotAffectStock(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("INTEGRATION_TESTS")) == "" {
+		t.Skip("set INTEGRATION_TESTS=1 to run integration tests (requires docker)")
+	}
+
+	ctx := context.Background()
+
+	redisName, redisPort := startRedisContainer(t)
+	t.Cleanup(func() { _ = dockerRmForce(redisName) })
+
+	mysqlName, mysqlPort := startMySQLContainer(t)
+	t.Cleanup(func() { _ = dockerRmForce(mysqlName) })
+
+	t.Setenv("REDIS_ADDRESS", fmt.Sprintf("127.0.0.1:%s", redisPort))
+	t.Setenv("DB_USER", "root")
+	t.Setenv("DB_PASSWORD", "testpw")
+	t.Setenv("DB_HOST", "127.0.0.1")
+	t.Setenv("DB_PORT", mysqlPort)
+	t.Setenv("DB_NAME_2", "pitibooks_test")
+	t.Setenv("STOCK_COMMANDS_DOCS", "")
+
+	config.ConnectDatabaseWithRetry()
+	config.ConnectRedisWithRetry()
+	models.MigrateTable()
+
+	ctx = utils.SetUserIdInContext(ctx, 1)
+	ctx = utils.SetUserNameInContext(ctx, "Test")
+	ctx = utils.SetUsernameInContext(ctx, "test@local")
+
+	biz, err := models.CreateBusiness(ctx, &models.NewBusiness{
+		Name:  "Test Biz",
+		Email: "owner@test.local",
+	})
+	if err != nil {
+		t.Fatalf("CreateBusiness: %v", err)
+	}
+	businessID := biz.ID.String()
+	ctx = utils.SetBusinessIdInContext(ctx, businessID)
+
+	db := config.GetDB()
+	relaxDate := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := db.WithContext(ctx).Model(&models.Business{}).Where("id = ?", biz.ID).Updates(map[string]interface{}{
+		"MigrationDate":                 relaxDate,
+		"SalesTransactionLockDate":      relaxDate,
+		"PurchaseTransactionLockDate":   relaxDate,
+		"BankingTransactionLockDate":    relaxDate,
+		"AccountantTransactionLockDate": relaxDate,
+	}).Error; err != nil {
+		t.Fatalf("relax business lock dates: %v", err)
+	}
+
+	var primary models.Warehouse
+	if err := db.WithContext(ctx).Where("business_id = ? AND name = ?", businessID, "Primary Warehouse").First(&primary).Error; err != nil {
+		t.Fatalf("fetch primary warehouse: %v", err)
+	}
+
+	unit, err := models.CreateProductUnit(ctx, &models.NewProductUnit{Name: "Pcs", Abbreviation: "pc", Precision: models.PrecisionZero})
+	if err != nil {
+		t.Fatalf("CreateProductUnit: %v", err)
+	}
+
+	sysAccounts, err := models.GetSystemAccounts(businessID)
+	if err != nil {
+		t.Fatalf("GetSystemAccounts: %v", err)
+	}
+	invAcc := sysAccounts[models.AccountCodeInventoryAsset]
+	salesAcc := sysAccounts[models.AccountCodeSales]
+	cogsAcc := sysAccounts[models.AccountCodeCostOfGoodsSold]
+	if invAcc == 0 || salesAcc == 0 || cogsAcc == 0 {
+		t.Fatalf("missing required system accounts (inv=%d sales=%d cogs=%d)", invAcc, salesAcc, cogsAcc)
+	}
+
+	tee, err := models.CreateProduct(ctx, &models.NewProduct{
+		Name:               "Tee",
+		Sku:                "TEE-001",
+		Barcode:            "TEE-001",
+		UnitId:             unit.ID,
+		SalesAccountId:     salesAcc,
+		PurchaseAccountId:  cogsAcc,
+		InventoryAccountId: invAcc,
+		PurchasePrice:      decimal.NewFromInt(100),
+		IsBatchTracking:    utils.NewFalse(),
+	})
+	if err != nil {
+		t.Fatalf("CreateProduct: %v", err)
+	}
+
+	supplier, err := models.CreateSupplier(ctx, &models.NewSupplier{
+		Name:               "test",
+		Email:              "supplier@test.local",
+		CurrencyId:         biz.BaseCurrencyId,
+		ExchangeRate:       decimal.NewFromInt(1),
+		SupplierPaymentTerms: models.PaymentTermsDueOnReceipt,
+	})
+	if err != nil {
+		t.Fatalf("CreateSupplier: %v", err)
+	}
+
+	customer, err := models.CreateCustomer(ctx, &models.NewCustomer{
+		Name:                 "customer3",
+		Email:                "customer3@test.local",
+		CurrencyId:           biz.BaseCurrencyId,
+		ExchangeRate:         decimal.NewFromInt(1),
+		CustomerPaymentTerms: models.PaymentTermsDueOnReceipt,
+	})
+	if err != nil {
+		t.Fatalf("CreateCustomer: %v", err)
+	}
+
+	isTaxInclusive := false
+	logger := logrus.New()
+
+	// PO-5 on 11 Jan 2026, qty 10 (Closed). POs should not affect stock ledger.
+	poDate1 := time.Date(2026, 1, 11, 12, 0, 0, 0, time.UTC)
+	po1, err := models.CreatePurchaseOrder(ctx, &models.NewPurchaseOrder{
+		SupplierId:        supplier.ID,
+		BranchId:          biz.PrimaryBranchId,
+		ReferenceNumber:   "PO-5",
+		OrderDate:         poDate1,
+		OrderPaymentTerms: models.PaymentTermsDueOnReceipt,
+		CurrencyId:        biz.BaseCurrencyId,
+		ExchangeRate:      decimal.NewFromInt(1),
+		WarehouseId:       primary.ID,
+		IsTaxInclusive:    &isTaxInclusive,
+		CurrentStatus:     models.PurchaseOrderStatusConfirmed,
+		Details: []models.NewPurchaseOrderDetail{{
+			ProductId:       tee.ID,
+			ProductType:     models.ProductTypeSingle,
+			BatchNumber:     "",
+			Name:            "Tee",
+			DetailAccountId: cogsAcc,
+			DetailQty:       decimal.NewFromInt(10),
+			DetailUnitRate:  decimal.NewFromInt(100),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CreatePurchaseOrder(PO-5): %v", err)
+	}
+	if _, err := models.UpdateStatusPurchaseOrder(ctx, po1.ID, string(models.PurchaseOrderStatusClosed)); err != nil {
+		t.Fatalf("UpdateStatusPurchaseOrder(PO-5): %v", err)
+	}
+
+	// Invoice IV-25 on 12 Jan 2026 qty 50.
+	invDate1 := time.Date(2026, 1, 12, 12, 0, 0, 0, time.UTC)
+	inv1, err := models.CreateSalesInvoice(ctx, &models.NewSalesInvoice{
+		CustomerId:          customer.ID,
+		BranchId:            biz.PrimaryBranchId,
+		InvoiceDate:         invDate1,
+		InvoicePaymentTerms: models.PaymentTermsDueOnReceipt,
+		CurrencyId:          biz.BaseCurrencyId,
+		ExchangeRate:        decimal.NewFromInt(1),
+		WarehouseId:         primary.ID,
+		IsTaxInclusive:      &isTaxInclusive,
+		CurrentStatus:       models.SalesInvoiceStatusConfirmed,
+		Details: []models.NewSalesInvoiceDetail{{
+			ProductId:      tee.ID,
+			ProductType:    models.ProductTypeSingle,
+			BatchNumber:    "",
+			Name:           "Tee",
+			Description:    "",
+			DetailQty:      decimal.NewFromInt(50),
+			DetailUnitRate: decimal.NewFromInt(200),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CreateSalesInvoice(IV-25): %v", err)
+	}
+	var invOutbox1 models.PubSubMessageRecord
+	if err := db.WithContext(ctx).
+		Where("business_id = ? AND reference_type = ? AND reference_id = ? AND action = ?",
+			businessID, models.AccountReferenceTypeInvoice, inv1.ID, models.PubSubMessageActionCreate).
+		Order("id DESC").
+		First(&invOutbox1).Error; err != nil {
+		t.Fatalf("expected outbox record for invoice(IV-25): %v", err)
+	}
+	wtxInv1 := db.Begin()
+	if err := workflow.ProcessInvoiceWorkflow(wtxInv1, logger, models.ConvertToPubSubMessage(invOutbox1)); err != nil {
+		t.Fatalf("ProcessInvoiceWorkflow(IV-25): %v", err)
+	}
+	if err := wtxInv1.Commit().Error; err != nil {
+		t.Fatalf("invoice workflow commit(IV-25): %v", err)
+	}
+
+	// PO-4 on 16 Jan 2026 qty 100 (Closed).
+	poDate2 := time.Date(2026, 1, 16, 12, 0, 0, 0, time.UTC)
+	po2, err := models.CreatePurchaseOrder(ctx, &models.NewPurchaseOrder{
+		SupplierId:        supplier.ID,
+		BranchId:          biz.PrimaryBranchId,
+		ReferenceNumber:   "PO-4",
+		OrderDate:         poDate2,
+		OrderPaymentTerms: models.PaymentTermsDueOnReceipt,
+		CurrencyId:        biz.BaseCurrencyId,
+		ExchangeRate:      decimal.NewFromInt(1),
+		WarehouseId:       primary.ID,
+		IsTaxInclusive:    &isTaxInclusive,
+		CurrentStatus:     models.PurchaseOrderStatusConfirmed,
+		Details: []models.NewPurchaseOrderDetail{{
+			ProductId:       tee.ID,
+			ProductType:     models.ProductTypeSingle,
+			BatchNumber:     "",
+			Name:            "Tee",
+			DetailAccountId: cogsAcc,
+			DetailQty:       decimal.NewFromInt(100),
+			DetailUnitRate:  decimal.NewFromInt(100),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CreatePurchaseOrder(PO-4): %v", err)
+	}
+	if _, err := models.UpdateStatusPurchaseOrder(ctx, po2.ID, string(models.PurchaseOrderStatusClosed)); err != nil {
+		t.Fatalf("UpdateStatusPurchaseOrder(PO-4): %v", err)
+	}
+
+	// Bills on 16 Jan 2026: BL-6 qty 100, BL-7 qty 10, BL-8 qty 10.
+	billDate := time.Date(2026, 1, 16, 12, 0, 0, 0, time.UTC)
+	newBills := []struct {
+		ref string
+		qty int64
+	}{
+		{ref: "BL-6", qty: 100},
+		{ref: "BL-7", qty: 10},
+		{ref: "BL-8", qty: 10},
+	}
+	for _, b := range newBills {
+		bill, err := models.CreateBill(ctx, &models.NewBill{
+			SupplierId:       supplier.ID,
+			BranchId:         biz.PrimaryBranchId,
+			BillDate:         billDate,
+			BillPaymentTerms: models.PaymentTermsDueOnReceipt,
+			CurrencyId:       biz.BaseCurrencyId,
+			ExchangeRate:     decimal.NewFromInt(1),
+			WarehouseId:      primary.ID,
+			IsTaxInclusive:   &isTaxInclusive,
+			CurrentStatus:    models.BillStatusConfirmed,
+			ReferenceNumber:  b.ref,
+			Details: []models.NewBillDetail{{
+				ProductId:      tee.ID,
+				ProductType:    models.ProductTypeSingle,
+				BatchNumber:    "",
+				Name:           "Tee",
+				Description:    "",
+				DetailAccountId: cogsAcc,
+				DetailQty:      decimal.NewFromInt(b.qty),
+				DetailUnitRate: decimal.NewFromInt(100),
+			}},
+		})
+		if err != nil {
+			t.Fatalf("CreateBill(%s): %v", b.ref, err)
+		}
+		var billOutbox models.PubSubMessageRecord
+		if err := db.WithContext(ctx).
+			Where("business_id = ? AND reference_type = ? AND reference_id = ? AND action = ?",
+				businessID, models.AccountReferenceTypeBill, bill.ID, models.PubSubMessageActionCreate).
+			Order("id DESC").
+			First(&billOutbox).Error; err != nil {
+			t.Fatalf("expected outbox record for bill(%s): %v", b.ref, err)
+		}
+		wtxBL := db.Begin()
+		if err := workflow.ProcessBillWorkflow(wtxBL, logger, models.ConvertToPubSubMessage(billOutbox)); err != nil {
+			t.Fatalf("ProcessBillWorkflow(%s): %v", b.ref, err)
+		}
+		if err := wtxBL.Commit().Error; err != nil {
+			t.Fatalf("bill workflow commit(%s): %v", b.ref, err)
+		}
+	}
+
+	// Invoice IV-24 on 16 Jan 2026 qty 50.
+	invDate2 := time.Date(2026, 1, 16, 12, 0, 0, 0, time.UTC)
+	inv2, err := models.CreateSalesInvoice(ctx, &models.NewSalesInvoice{
+		CustomerId:          customer.ID,
+		BranchId:            biz.PrimaryBranchId,
+		InvoiceDate:         invDate2,
+		InvoicePaymentTerms: models.PaymentTermsDueOnReceipt,
+		CurrencyId:          biz.BaseCurrencyId,
+		ExchangeRate:        decimal.NewFromInt(1),
+		WarehouseId:         primary.ID,
+		IsTaxInclusive:      &isTaxInclusive,
+		CurrentStatus:       models.SalesInvoiceStatusConfirmed,
+		Details: []models.NewSalesInvoiceDetail{{
+			ProductId:      tee.ID,
+			ProductType:    models.ProductTypeSingle,
+			BatchNumber:    "",
+			Name:           "Tee",
+			Description:    "",
+			DetailQty:      decimal.NewFromInt(50),
+			DetailUnitRate: decimal.NewFromInt(200),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CreateSalesInvoice(IV-24): %v", err)
+	}
+	var invOutbox2 models.PubSubMessageRecord
+	if err := db.WithContext(ctx).
+		Where("business_id = ? AND reference_type = ? AND reference_id = ? AND action = ?",
+			businessID, models.AccountReferenceTypeInvoice, inv2.ID, models.PubSubMessageActionCreate).
+		Order("id DESC").
+		First(&invOutbox2).Error; err != nil {
+		t.Fatalf("expected outbox record for invoice(IV-24): %v", err)
+	}
+	wtxInv2 := db.Begin()
+	if err := workflow.ProcessInvoiceWorkflow(wtxInv2, logger, models.ConvertToPubSubMessage(invOutbox2)); err != nil {
+		t.Fatalf("ProcessInvoiceWorkflow(IV-24): %v", err)
+	}
+	if err := wtxInv2.Commit().Error; err != nil {
+		t.Fatalf("invoice workflow commit(IV-24): %v", err)
+	}
+
+	// PO-6 on 18 Jan 2026 qty 10 (Closed).
+	poDate3 := time.Date(2026, 1, 18, 12, 0, 0, 0, time.UTC)
+	po3, err := models.CreatePurchaseOrder(ctx, &models.NewPurchaseOrder{
+		SupplierId:        supplier.ID,
+		BranchId:          biz.PrimaryBranchId,
+		ReferenceNumber:   "PO-6",
+		OrderDate:         poDate3,
+		OrderPaymentTerms: models.PaymentTermsDueOnReceipt,
+		CurrencyId:        biz.BaseCurrencyId,
+		ExchangeRate:      decimal.NewFromInt(1),
+		WarehouseId:       primary.ID,
+		IsTaxInclusive:    &isTaxInclusive,
+		CurrentStatus:     models.PurchaseOrderStatusConfirmed,
+		Details: []models.NewPurchaseOrderDetail{{
+			ProductId:       tee.ID,
+			ProductType:     models.ProductTypeSingle,
+			BatchNumber:     "",
+			Name:            "Tee",
+			DetailAccountId: cogsAcc,
+			DetailQty:       decimal.NewFromInt(10),
+			DetailUnitRate:  decimal.NewFromInt(100),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CreatePurchaseOrder(PO-6): %v", err)
+	}
+	if _, err := models.UpdateStatusPurchaseOrder(ctx, po3.ID, string(models.PurchaseOrderStatusClosed)); err != nil {
+		t.Fatalf("UpdateStatusPurchaseOrder(PO-6): %v", err)
+	}
+
+	// Inventory valuation should only include stock movements (Bills + Invoices).
+	from := models.MyDateString(time.Date(2025, 12, 31, 0, 0, 0, 0, time.UTC))
+	to := models.MyDateString(time.Date(2026, 1, 31, 0, 0, 0, 0, time.UTC))
+	val, err := models.GetInventoryValuation(ctx, from, to, tee.ID, models.ProductTypeSingle, primary.ID)
+	if err != nil {
+		t.Fatalf("GetInventoryValuation: %v", err)
+	}
+
+	totalReceived := decimal.NewFromInt(0)
+	totalSold := decimal.NewFromInt(0)
+	for _, d := range val.Details {
+		if d == nil {
+			continue
+		}
+		if d.Qty.GreaterThan(decimal.Zero) {
+			totalReceived = totalReceived.Add(d.Qty)
+		}
+		if d.Qty.LessThan(decimal.Zero) {
+			totalSold = totalSold.Add(d.Qty.Abs())
+		}
+	}
+	if totalReceived.Cmp(decimal.NewFromInt(120)) != 0 {
+		t.Fatalf("expected total received=120; got %s", totalReceived.String())
+	}
+	if totalSold.Cmp(decimal.NewFromInt(100)) != 0 {
+		t.Fatalf("expected total sold=100; got %s", totalSold.String())
+	}
+	if val.ClosingStockOnHand.Cmp(decimal.NewFromInt(20)) != 0 {
+		t.Fatalf("expected closing stock=20; got %s", val.ClosingStockOnHand.String())
+	}
+	if val.ClosingAssetValue.Cmp(decimal.NewFromInt(2000)) != 0 {
+		t.Fatalf("expected closing asset value=2000; got %s", val.ClosingAssetValue.String())
+	}
+}
+
 // Regression: backdated incoming Bill should deterministically reprice outgoing COGS
 // without creating duplicate valuation rows or zero-qty artifacts.
 func TestInventoryValuation_BackdatedBill_RebuildsDeterministically(t *testing.T) {

@@ -231,7 +231,7 @@ SELECT
         stock_histories.product_id,
         stock_histories.product_type
         ORDER BY
-            stock_histories.stock_date, stock_histories.cumulative_sequence ROWS BETWEEN UNBOUNDED PRECEDING
+            stock_histories.stock_date, stock_histories.cumulative_sequence, stock_histories.id ROWS BETWEEN UNBOUNDED PRECEDING
             AND CURRENT ROW
     ) AS stock_on_hand,
     @openingAssetValue + SUM(stock_histories.qty * stock_histories.base_unit_value) OVER (
@@ -241,7 +241,7 @@ SELECT
         stock_histories.product_id,
         stock_histories.product_type
         ORDER BY
-            stock_histories.stock_date, stock_histories.cumulative_sequence ROWS BETWEEN UNBOUNDED PRECEDING
+            stock_histories.stock_date, stock_histories.cumulative_sequence, stock_histories.id ROWS BETWEEN UNBOUNDED PRECEDING
             AND CURRENT ROW
     ) AS asset_value
 FROM
@@ -264,7 +264,7 @@ WHERE
 		AND stock_histories.reference_type IN ('POS', 'PGOS', 'PCOS')
 	)
 {{- end }}
-ORDER BY stock_histories.stock_date, stock_histories.cumulative_sequence
+ORDER BY stock_histories.stock_date, stock_histories.cumulative_sequence, stock_histories.id
 `
 
 	sql, err := utils.ExecTemplate(sqlT, map[string]interface{}{
