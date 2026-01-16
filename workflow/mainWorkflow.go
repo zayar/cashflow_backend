@@ -506,22 +506,56 @@ func calculateCogs(tx *gorm.DB, logger *logrus.Logger, productDetail ProductDeta
 	existingStocks := make(map[string]StockHistoryFragment)
 	existingStockDetails := make(map[string]StockHistoryDetailFragment)
 
-	// Query existing stock histories for this reference directly from DB to ensure we compare
-	// against the correct baseline (stock histories created by previous calculateCogs runs
-	// for THIS invoice/reference), not stock histories from other transactions.
-	// This prevents COGS miscalculation when outgoingStockHistories includes rows from
-	// other invoices for the same product.
+	// Query existing stock histories for references in scope so we can:
+	// - compute deltas for COGS/journal reposts
+	// - reverse stale valuation rows that are no longer valid
 	if len(outgoingStockHistories) > 0 {
 		var existingRefStockHistories []*models.StockHistory
 		firstOutStock := outgoingStockHistories[0]
-		err = tx.
-			Where("business_id = ? AND reference_type = ? AND reference_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND is_outgoing = 1 AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
-				firstOutStock.BusinessId, updatedReferenceType, updatedReferenceId, firstOutStock.WarehouseId, firstOutStock.ProductId, firstOutStock.ProductType, firstOutStock.BatchNumber).
-			Find(&existingRefStockHistories).Error
-		if err != nil {
-			config.LogError(logger, "MainWorkflow.go", "CalculateCogs", "QueryExistingRefStockHistories", updatedReferenceId, err)
-			return accountIds, err
+
+		if updatedReferenceId > 0 && updatedReferenceType != "" {
+			// Normal path: only scope to the updated reference.
+			err = tx.
+				Where("business_id = ? AND reference_type = ? AND reference_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND is_outgoing = 1 AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
+					firstOutStock.BusinessId, updatedReferenceType, updatedReferenceId, firstOutStock.WarehouseId, firstOutStock.ProductId, firstOutStock.ProductType, firstOutStock.BatchNumber).
+				Find(&existingRefStockHistories).Error
+			if err != nil {
+				config.LogError(logger, "MainWorkflow.go", "CalculateCogs", "QueryExistingRefStockHistories", updatedReferenceId, err)
+				return accountIds, err
+			}
+		} else {
+			// Rebuild path (backdated incoming): include ALL outgoing references in scope.
+			refIdsByType := make(map[models.StockReferenceType][]int)
+			refSeen := make(map[models.StockReferenceType]map[int]struct{})
+			for _, outStock := range outgoingStockHistories {
+				if outStock == nil {
+					continue
+				}
+				if _, ok := refSeen[outStock.ReferenceType]; !ok {
+					refSeen[outStock.ReferenceType] = make(map[int]struct{})
+				}
+				if _, ok := refSeen[outStock.ReferenceType][outStock.ReferenceID]; ok {
+					continue
+				}
+				refSeen[outStock.ReferenceType][outStock.ReferenceID] = struct{}{}
+				refIdsByType[outStock.ReferenceType] = append(refIdsByType[outStock.ReferenceType], outStock.ReferenceID)
+			}
+			for refType, refIds := range refIdsByType {
+				var rows []*models.StockHistory
+				err = tx.
+					Where("business_id = ? AND reference_type = ? AND reference_id IN ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND is_outgoing = 1 AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
+						firstOutStock.BusinessId, refType, refIds, firstOutStock.WarehouseId, firstOutStock.ProductId, firstOutStock.ProductType, firstOutStock.BatchNumber).
+					Find(&rows).Error
+				if err != nil {
+					config.LogError(logger, "MainWorkflow.go", "CalculateCogs", "QueryExistingRefStockHistoriesAll", refType, err)
+					return accountIds, err
+				}
+				if len(rows) > 0 {
+					existingRefStockHistories = append(existingRefStockHistories, rows...)
+				}
+			}
 		}
+
 		for _, refStock := range existingRefStockHistories {
 			key := fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d", refStock.WarehouseId, refStock.ProductId, refStock.ProductType, refStock.BatchNumber, refStock.ReferenceID, refStock.ReferenceType, refStock.ReferenceDetailID)
 			if existing, found := existingStocks[key]; found {
@@ -926,6 +960,22 @@ func calculateCogs(tx *gorm.DB, logger *logrus.Logger, productDetail ProductDeta
 				).
 				First(dup).Error
 			if dupErr == nil {
+				if logger != nil {
+					logger.WithFields(logrus.Fields{
+						"ledgerKey": fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d:%s",
+							uStockDetail.WarehouseId, uStockDetail.ProductId, uStockDetail.ProductType, uStockDetail.BatchNumber,
+							uStockDetail.ReferenceId, uStockDetail.ReferenceType, uStockDetail.ReferenceDetailId, uStockDetail.BaseUnitValue.String()),
+						"business_id":         uStockDetail.BusinessId,
+						"warehouse_id":        uStockDetail.WarehouseId,
+						"product_id":          uStockDetail.ProductId,
+						"product_type":        uStockDetail.ProductType,
+						"batch_number":        uStockDetail.BatchNumber,
+						"reference_id":        uStockDetail.ReferenceId,
+						"reference_type":      uStockDetail.ReferenceType,
+						"reference_detail_id": uStockDetail.ReferenceDetailId,
+						"base_unit_value":     uStockDetail.BaseUnitValue.String(),
+					}).Info("inv.posting.idempotency_hit")
+				}
 				// Already exists; do not insert another identical active row.
 				continue
 			}
@@ -1417,7 +1467,71 @@ func ProcessIncomingStocks(tx *gorm.DB, logger *logrus.Logger, stockHistories []
 		return accountIds, err
 	}
 
+	// Detect backdated incoming stock and rebuild deterministically from the earliest affected date.
+	type rebuildKey struct {
+		WarehouseId int
+		ProductId   int
+		ProductType models.ProductType
+		BatchNumber string
+	}
+	rebuildStarts := make(map[rebuildKey]time.Time)
+	for _, sh := range stockHistories {
+		if sh == nil {
+			continue
+		}
+		key := rebuildKey{
+			WarehouseId: sh.WarehouseId,
+			ProductId:   sh.ProductId,
+			ProductType: sh.ProductType,
+			BatchNumber: sh.BatchNumber,
+		}
+		if existing, ok := rebuildStarts[key]; !ok || sh.StockDate.Before(existing) {
+			rebuildStarts[key] = sh.StockDate
+		}
+	}
+	rebuildKeys := make(map[rebuildKey]time.Time)
+	for key, startDate := range rebuildStarts {
+		var outgoingCount int64
+		err = tx.Model(&models.StockHistory{}).
+			Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ?",
+				stockHistories[0].BusinessId, key.WarehouseId, key.ProductId, key.ProductType, key.BatchNumber).
+			Where("is_outgoing = 1 AND stock_date >= ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL", startDate).
+			Count(&outgoingCount).Error
+		if err != nil {
+			config.LogError(logger, "MainWorkflow.go", "ProcessIncomingStocks", "CountOutgoingForRebuild", key, err)
+			return accountIds, err
+		}
+		if outgoingCount > 0 {
+			rebuildKeys[key] = startDate
+		}
+	}
+	for key, startDate := range rebuildKeys {
+		ids, err := RebuildInventoryForItemWarehouseFromDate(
+			tx, logger, stockHistories[0].BusinessId, key.WarehouseId, key.ProductId, key.ProductType, key.BatchNumber, startDate,
+		)
+		if err != nil {
+			return accountIds, err
+		}
+		if len(ids) > 0 {
+			accountIds = utils.MergeIntSlices(accountIds, ids)
+		}
+	}
+
 	for _, stockHistory := range stockHistories {
+		if stockHistory == nil {
+			continue
+		}
+		key := rebuildKey{
+			WarehouseId: stockHistory.WarehouseId,
+			ProductId:   stockHistory.ProductId,
+			ProductType: stockHistory.ProductType,
+			BatchNumber: stockHistory.BatchNumber,
+		}
+		if _, shouldSkip := rebuildKeys[key]; shouldSkip {
+			// Already rebuilt deterministically for this key.
+			continue
+		}
+
 		productDetail, err := GetProductDetail(tx, stockHistory.ProductId, stockHistory.ProductType)
 		if err != nil {
 			config.LogError(logger, "MainWorkflow.go", "ProcessOutgoingStocks", "GetProductDetail", stockHistory, err)
@@ -1446,7 +1560,28 @@ func ProcessIncomingStocks(tx *gorm.DB, logger *logrus.Logger, stockHistories []
 			return accountIds, err
 		}
 
-		if lastCumulativeIncomingQty.LessThan(maxCumulativeOutgoingQty) {
+		shouldRecalc := lastCumulativeIncomingQty.LessThan(maxCumulativeOutgoingQty)
+		if !shouldRecalc {
+			// Backdated incoming stock can change FIFO/COGS for outgoing rows that are already posted
+			// on or after this stock_date. Recalculate whenever such outgoing rows exist.
+			var outgoingCount int64
+			err = tx.Model(&models.StockHistory{}).
+				Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ?",
+					stockHistory.BusinessId, stockHistory.WarehouseId, stockHistory.ProductId, stockHistory.ProductType, stockHistory.BatchNumber).
+				Where("is_outgoing = 1").
+				Where("stock_date >= ?", stockHistory.StockDate).
+				Where("is_reversal = 0 AND reversed_by_stock_history_id IS NULL").
+				Count(&outgoingCount).Error
+			if err != nil {
+				config.LogError(logger, "MainWorkflow.go", "ProcessIncomingStocks", "CountOutgoingAfterIncomingDate", stockHistory, err)
+				return accountIds, err
+			}
+			if outgoingCount > 0 {
+				shouldRecalc = true
+			}
+		}
+
+		if shouldRecalc {
 			remainingIncomingStockHistories, err := GetRemainingStockHistoriesByDate(tx, stockHistory.WarehouseId, stockHistory.ProductId, string(stockHistory.ProductType), stockHistory.BatchNumber, utils.NewFalse(), stockHistory.StockDate)
 			if err != nil {
 				config.LogError(logger, "MainWorkflow.go", "ProcessIncomingStocks", "GetRemainingStockHistoriesByDate", stockHistory, err)
@@ -1463,7 +1598,8 @@ func ProcessIncomingStocks(tx *gorm.DB, logger *logrus.Logger, stockHistories []
 			if len(remainingOutgoingStockHistories) > 0 {
 				startProcessQty = remainingOutgoingStockHistories[0].CumulativeOutgoingQty.Sub(lastCumulativeIncomingQty)
 			}
-			accountIds, err = calculateCogs(tx, logger, productDetail, startProcessQty, decimal.NewFromInt(0), remainingIncomingStockHistories, remainingOutgoingStockHistories, stockHistory.ReferenceID, stockHistory.ReferenceType)
+			// Pass 0 reference to recalc for ALL outgoing references in scope (backdated incoming).
+			accountIds, err = calculateCogs(tx, logger, productDetail, startProcessQty, decimal.NewFromInt(0), remainingIncomingStockHistories, remainingOutgoingStockHistories, 0, "")
 			if err != nil {
 				return accountIds, err
 			}
