@@ -62,62 +62,36 @@ func GetInventoryValuation(ctx context.Context, fromDate MyDateString, toDate My
 	if warehouseId > 0 {
 		openingSql = `
 		SELECT
-			sh.closing_asset_value as opening_asset_value,
-			sh.closing_qty as opening_stock_on_hand
-		from
+			COALESCE(SUM(sh.qty * sh.base_unit_value), 0) AS opening_asset_value,
+			COALESCE(SUM(sh.qty), 0) AS opening_stock_on_hand
+		FROM
 			stock_histories sh
-		where
+		WHERE
 			sh.business_id = @businessId
 			AND sh.stock_date < @fromDate
-			and product_id = @productId
-			and product_type = @productType
-			and warehouse_id = @warehouseId
+			AND sh.product_id = @productId
+			AND sh.product_type = @productType
+			AND sh.warehouse_id = @warehouseId
 			-- Only include active ledger rows (exclude reversals and rows that have been reversed).
 			AND sh.is_reversal = 0
 			AND sh.reversed_by_stock_history_id IS NULL
-		order by
-			stock_date desc,
-			cumulative_sequence DESC
-			limit 1
 				`
 	} else {
 		openingSql = `
--- get opening stockOnHand,assetValue from all warehouses
-with LastStockHistories AS (
-    SELECT
-        closing_asset_value,
-        closing_qty,
-        (
-            ROW_NUMBER() Over (
-                PARTITION by business_id,
-					warehouse_id,
-                product_type,
-                product_id
-                order by
-                    stock_date desc,
-					cumulative_sequence DESC
-            )
-        ) as rn
-    from
-        stock_histories sh
-    WHERE
-		business_id = @businessId
-        AND stock_date < @fromDate
-        and product_id = @productId
-        and product_type = @productType
-		-- Only include active ledger rows (exclude reversals and rows that have been reversed).
-		AND sh.is_reversal = 0
-		AND sh.reversed_by_stock_history_id IS NULL
-)
+-- get opening stockOnHand,assetValue from all warehouses (ledger-of-record sums)
 SELECT
-    sum(closing_asset_value) opening_asset_value,
-    sum(closing_qty) opening_stock_on_hand
+	COALESCE(SUM(sh.qty * sh.base_unit_value), 0) AS opening_asset_value,
+	COALESCE(SUM(sh.qty), 0) AS opening_stock_on_hand
 FROM
-    LastStockHistories lsh
+	stock_histories sh
 WHERE
-    rn = 1
-group by
-    rn
+	sh.business_id = @businessId
+	AND sh.stock_date < @fromDate
+	AND sh.product_id = @productId
+	AND sh.product_type = @productType
+	-- Only include active ledger rows (exclude reversals and rows that have been reversed).
+	AND sh.is_reversal = 0
+	AND sh.reversed_by_stock_history_id IS NULL
 		`
 
 	}
@@ -255,8 +229,7 @@ SELECT
 	{{- end }}
 		stock_histories.business_id,
         stock_histories.product_id,
-        stock_histories.product_type,
-        stock_histories.batch_number
+        stock_histories.product_type
         ORDER BY
             stock_histories.stock_date, stock_histories.cumulative_sequence ROWS BETWEEN UNBOUNDED PRECEDING
             AND CURRENT ROW
@@ -266,8 +239,7 @@ SELECT
 		{{- if gt .warehouseId 0}} stock_histories.warehouse_id, {{- end }}
 		stock_histories.business_id,
         stock_histories.product_id,
-        stock_histories.product_type,
-        stock_histories.batch_number
+        stock_histories.product_type
         ORDER BY
             stock_histories.stock_date, stock_histories.cumulative_sequence ROWS BETWEEN UNBOUNDED PRECEDING
             AND CURRENT ROW
