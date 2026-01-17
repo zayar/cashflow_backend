@@ -22,159 +22,39 @@ type StockSummaryReportResponse struct {
 func GetStockSummaryReport(ctx context.Context, fromDate models.MyDateString, toDate models.MyDateString, warehouseId *int) ([]*StockSummaryReportResponse, error) {
 
 	sqlT := `
-WITH InOutQty AS (
+WITH Ledger AS (
     SELECT
-        product_id,
-        product_type,
-        SUM(opening_qty) + SUM(received_qty) + SUM(adjusted_qty_in) + SUM(transfer_qty_in) AS qty_in,
-        SUM(sale_qty) + SUM(ABS(adjusted_qty_out)) + SUM(ABS(transfer_qty_out)) AS qty_out
-    FROM
-        stock_summary_daily_balances
-    WHERE
-        business_id = @businessId
-        AND transaction_date BETWEEN @fromDate
-        AND @toDate
-        {{- if .warehouseId }} AND warehouse_id = @warehouseId {{- end }}
-    GROUP BY
-        product_id,
-        product_type
-),
-OpeningStock AS (
-    SELECT
-        product_id,
-        product_type,
-        SUM(current_qty) AS opening_stock
-    FROM
-        stock_summary_daily_balances
-    WHERE
-        business_id = @businessId
-        AND transaction_date < @fromDate
-        {{- if .warehouseId }} AND warehouse_id = @warehouseId {{- end }}
-    GROUP BY
-        product_id,
-        product_type
-),
-CombinedProducts AS (
-    SELECT product_id, product_type FROM InOutQty
-    UNION
-    SELECT product_id, product_type FROM OpeningStock
+        sh.product_id,
+        sh.product_type,
+        SUM(CASE WHEN sh.stock_date < @fromDate THEN sh.qty ELSE 0 END) AS opening_stock,
+        SUM(CASE WHEN sh.stock_date BETWEEN @fromDate AND @toDate AND sh.qty > 0 THEN sh.qty ELSE 0 END) AS qty_in,
+        SUM(CASE WHEN sh.stock_date BETWEEN @fromDate AND @toDate AND sh.qty < 0 THEN ABS(sh.qty) ELSE 0 END) AS qty_out
+    FROM stock_histories sh
+    WHERE sh.business_id = @businessId
+      AND sh.is_reversal = 0
+      AND sh.reversed_by_stock_history_id IS NULL
+      {{- if .warehouseId }} AND sh.warehouse_id = @warehouseId {{- end }}
+    GROUP BY sh.product_id, sh.product_type
 ),
 AllProducts AS (
-    SELECT
-        id AS product_id,
-        name AS product_name,
-        sku AS product_sku,
-        'S' AS product_type
-    FROM
-        products
-    WHERE
-        business_id = @businessId 
-        AND inventory_account_id > 0
+    SELECT id AS product_id, name AS product_name, sku AS product_sku, 'S' AS product_type
+    FROM products
+    WHERE business_id = @businessId AND inventory_account_id > 0
     UNION
-    SELECT
-        id AS product_id,
-        name AS product_name,
-        sku AS product_sku,
-        'V' AS product_type
-    FROM
-        product_variants
-    WHERE
-        business_id = @businessId 
-        AND inventory_account_id > 0
+    SELECT id AS product_id, name AS product_name, sku AS product_sku, 'V' AS product_type
+    FROM product_variants
+    WHERE business_id = @businessId AND inventory_account_id > 0
 )
 SELECT
-    CombinedProducts.product_id,
-    CombinedProducts.product_type,
-    AllProducts.product_sku,
-    AllProducts.product_name,
-    COALESCE(InOutQty.qty_in, 0) AS qty_in,
-    COALESCE(InOutQty.qty_out, 0) AS qty_out,
-    COALESCE(OpeningStock.opening_stock, 0) AS opening_stock,
-    COALESCE(OpeningStock.opening_stock, 0) + COALESCE(InOutQty.qty_in, 0) - COALESCE(InOutQty.qty_out, 0) AS closing_stock
-FROM
-    CombinedProducts
-LEFT JOIN InOutQty
-    ON CombinedProducts.product_id = InOutQty.product_id
-    AND CombinedProducts.product_type = InOutQty.product_type
-LEFT JOIN OpeningStock
-    ON CombinedProducts.product_id = OpeningStock.product_id
-    AND CombinedProducts.product_type = OpeningStock.product_type
-LEFT JOIN AllProducts
-    ON CombinedProducts.product_id = AllProducts.product_id
-    AND CombinedProducts.product_type = AllProducts.product_type
-ORDER BY AllProducts.product_name;
-
-`
-	var _ = `
-WITH inOutQty AS (
-    SELECT
-        product_id,
-        product_type,
-        SUM(opening_qty) + SUM(received_qty) + SUM(adjusted_qty_in) + SUM(transfer_qty_in) AS qty_in,
-        SUM(sale_qty) + SUM(ABS(adjusted_qty_out)) + SUM(ABS(transfer_qty_out)) AS qty_out
-    FROM
-        stock_summary_daily_balances
-    WHERE
-        business_id = @businessId
-        AND transaction_date BETWEEN @fromDate AND @toDate
-        {{- if .warehouseId }} AND warehouse_id = @warehouseId {{- end }}
-    GROUP BY
-        product_id, product_type
-),
-StockSummary AS (
-    SELECT
-        inOutQty.*,
-        COALESCE(openingStocks.opening_stock, 0) AS opening_stock,
-        COALESCE(openingStocks.opening_stock, 0) + inOutQty.qty_in - inOutQty.qty_out AS closing_stock
-    FROM
-        (
-        ) AS inOutQty
-        LEFT JOIN (
-            SELECT
-                product_id,
-                product_type,
-                SUM(current_qty) AS opening_stock
-            FROM
-                stock_summary_daily_balances
-            WHERE
-				business_id = @businessId
-                AND transaction_date < @fromDate
-                {{- if .warehouseId }} AND warehouse_id = @warehouseId {{- end }}
-            GROUP BY
-                product_id, product_type
-        ) AS openingStocks ON openingStocks.product_id = inOutQty.product_id
-        AND openingStocks.product_type = inOutQty.product_type
-),
-AllProducts AS (
-    SELECT
-        id AS product_id,
-        name AS product_name,
-        sku AS product_sku,
-        'S' AS product_type
-    FROM
-        products
-    UNION
-    SELECT
-        id AS product_id,
-        name AS product_name,
-        sku AS product_sku,
-        'V' AS product_type
-    FROM
-        product_variants
-)
-SELECT
-    AllProducts.product_id,
-    AllProducts.product_type,
-    AllProducts.product_sku,
-    AllProducts.product_name,
-    StockSummary.opening_stock,
-    StockSummary.qty_in,
-    StockSummary.qty_out,
-    StockSummary.closing_stock
-FROM
-    StockSummary
-    LEFT JOIN AllProducts ON StockSummary.product_id = AllProducts.product_id
-    AND StockSummary.product_type = AllProducts.product_type
+    ap.product_name,
+    ap.product_sku,
+    COALESCE(l.opening_stock, 0) AS opening_stock,
+    COALESCE(l.qty_in, 0) AS qty_in,
+    COALESCE(l.qty_out, 0) AS qty_out,
+    COALESCE(l.opening_stock, 0) + COALESCE(l.qty_in, 0) - COALESCE(l.qty_out, 0) AS closing_stock
+FROM AllProducts ap
+LEFT JOIN Ledger l ON ap.product_id = l.product_id AND ap.product_type = l.product_type
+ORDER BY ap.product_name;
 `
 	businessId, ok := utils.GetBusinessIdFromContext(ctx)
 	if !ok || businessId == "" {

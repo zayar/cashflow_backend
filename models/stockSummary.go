@@ -311,35 +311,47 @@ func GetStockInHand(ctx context.Context, productId int, productType string) (dec
 		return decimal.Zero, errors.New("business id is required")
 	}
 
-	var stockInHand decimal.Decimal
-	db := config.GetDB()
-
-	dbCtx := db.WithContext(ctx).
-		Model(&StockSummary{}).
-		Select("COALESCE(SUM(current_qty), 0)").
-		Where("business_id = ?", businessId)
-	if productType == string(ProductTypeGroup) {
-		// NOTE: product IDs can overlap across businesses; always scope by business_id.
-		dbCtx.Where(
-			"product_type = ? AND product_id IN (SELECT id FROM product_variants WHERE product_group_id = ? AND business_id = ?)",
-			ProductTypeVariant,
-			productId,
-			businessId,
-		)
-	} else {
-		dbCtx.Where("product_id = ?", productId).
-			Where("product_type = ?", productType)
-	}
-	err := dbCtx.Scan(&stockInHand).Error
-
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return decimal.Zero, nil
+	// Canonical: compute from the ledger-of-record (stock_histories) to avoid stale caches.
+	today := MyDateString(time.Now().In(time.UTC))
+	var pType *ProductType
+	switch productType {
+	case string(ProductTypeGroup):
+		// For product groups, aggregate variants owned by the group.
+		variantIds, err := getVariantIdsByGroup(ctx, businessId, productId)
+		if err != nil {
+			return decimal.Zero, err
 		}
+		total := decimal.Zero
+		for _, vid := range variantIds {
+			vType := ProductTypeVariant
+			pid := vid
+			rows, err := InventorySnapshotByProduct(ctx, today, &pid, &vType)
+			if err != nil {
+				return decimal.Zero, err
+			}
+			for _, r := range rows {
+				total = total.Add(r.StockOnHand)
+			}
+		}
+		return total, nil
+	default:
+		pt := ProductType(productType)
+		pType = &pt
+	}
+
+	pid := productId
+	rows, err := InventorySnapshotByProduct(ctx, today, &pid, pType)
+	if err != nil {
 		return decimal.Zero, err
 	}
-
-	return stockInHand, nil
+	if len(rows) == 0 {
+		return decimal.Zero, nil
+	}
+	total := decimal.Zero
+	for _, r := range rows {
+		total = total.Add(r.StockOnHand)
+	}
+	return total, nil
 }
 
 func ProcessStockIntegration(tx *gorm.DB, businessId, productType string, productId int) error {
@@ -349,4 +361,20 @@ func ProcessStockIntegration(tx *gorm.DB, businessId, productType string, produc
 		biz.ProcessProductIntegrationWorkflow(tx, productId)
 	}
 	return nil
+}
+
+// getVariantIdsByGroup lists variant ids for a product group within a business.
+func getVariantIdsByGroup(ctx context.Context, businessId string, groupId int) ([]int, error) {
+	db := config.GetDB()
+	if db == nil {
+		return nil, errors.New("database not initialized")
+	}
+	var ids []int
+	if err := db.WithContext(ctx).
+		Model(&ProductVariant{}).
+		Where("business_id = ? AND product_group_id = ?", businessId, groupId).
+		Pluck("id", &ids).Error; err != nil {
+		return nil, err
+	}
+	return ids, nil
 }

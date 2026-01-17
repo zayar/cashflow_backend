@@ -30,109 +30,105 @@ type InventorySummaryResponse struct {
 
 // SQL for ALL warehouses (no warehouse filter)
 const inventorySummarySqlAllWarehouses = `
-WITH InventorySummary AS (
+WITH Ledger AS (
     SELECT
-        COUNT(*) AS count,
-        product_id,
-        product_type,
-        batch_number,
-        SUM(opening_qty) AS opening_qty,
-        SUM(order_qty) AS order_qty,
-        SUM(received_qty) AS received_qty,
-        SUM(sale_qty) AS sale_qty,
-        SUM(transfer_qty_in) AS transfer_qty_in,
-        SUM(ABS(transfer_qty_out)) AS transfer_qty_out,
-        SUM(adjusted_qty_in) AS adjusted_qty_in,
-        SUM(ABS(adjusted_qty_out)) AS adjusted_qty_out,
-        SUM(committed_qty) AS committed_qty,
-        SUM(received_qty + adjusted_qty_in + transfer_qty_in - sale_qty - abs(adjusted_qty_out) - abs(transfer_qty_out)) AS current_qty
-    FROM stock_summary_daily_balances
-    WHERE transaction_date <= @toDate
-        AND business_id = @businessId
-    GROUP BY product_id, product_type, batch_number
+        sh.product_id,
+        sh.product_type,
+        SUM(CASE WHEN sh.reference_type IN ('POS','PGOS','PCOS') THEN sh.qty ELSE 0 END) AS opening_qty,
+        SUM(CASE WHEN sh.reference_type IN ('BL','CN') AND sh.qty > 0 THEN sh.qty ELSE 0 END) AS received_qty,
+        SUM(CASE WHEN sh.reference_type = 'IV' THEN ABS(sh.qty) ELSE 0 END) AS sale_qty,
+        SUM(CASE WHEN sh.reference_type = 'TO' AND sh.is_transfer_in = true THEN sh.qty ELSE 0 END) AS transfer_qty_in,
+        SUM(CASE WHEN sh.reference_type = 'TO' AND sh.is_transfer_in = false THEN ABS(sh.qty) ELSE 0 END) AS transfer_qty_out,
+        SUM(CASE WHEN sh.reference_type = 'IVAQ' AND sh.qty > 0 THEN sh.qty ELSE 0 END) AS adjusted_qty_in,
+        SUM(CASE WHEN sh.reference_type = 'IVAQ' AND sh.qty < 0 THEN ABS(sh.qty) ELSE 0 END) AS adjusted_qty_out,
+        SUM(sh.qty) AS current_qty
+    FROM stock_histories sh
+    WHERE sh.business_id = @businessId
+      AND sh.stock_date <= @toDate
+      AND sh.is_reversal = 0
+      AND sh.reversed_by_stock_history_id IS NULL
+    GROUP BY sh.product_id, sh.product_type
 ),
 AllProducts AS (
-    SELECT
-        id AS product_id,
-        NAME AS product_name,
-        unit_id AS product_unit_id,
-        sku AS product_sku,
-        'S' AS product_type
+    SELECT id AS product_id, NAME AS product_name, unit_id AS product_unit_id, sku AS product_sku, 'S' AS product_type
     FROM products
     WHERE business_id = @businessId
     UNION
-    SELECT
-        id AS product_id,
-        NAME AS product_name,
-        unit_id AS product_unit_id,
-        sku AS product_sku,
-        'V' AS product_type
+    SELECT id AS product_id, NAME AS product_name, unit_id AS product_unit_id, sku AS product_sku, 'V' AS product_type
     FROM product_variants
     WHERE business_id = @businessId
 )
 SELECT
-    InventorySummary.*,
-    AllProducts.product_name,
-    AllProducts.product_unit_id,
-    AllProducts.product_sku,
-    current_qty - committed_qty AS available_stock
-FROM InventorySummary
-LEFT JOIN AllProducts ON InventorySummary.product_type = AllProducts.product_type
-    AND InventorySummary.product_id = AllProducts.product_id
+    ap.product_id,
+    ap.product_type,
+    ap.product_name,
+    ap.product_unit_id,
+    ap.product_sku,
+    COALESCE(l.opening_qty, 0) AS opening_qty,
+    0 AS order_qty,
+    COALESCE(l.received_qty, 0) AS received_qty,
+    COALESCE(l.transfer_qty_in, 0) AS transfer_qty_in,
+    COALESCE(l.transfer_qty_out, 0) AS transfer_qty_out,
+    COALESCE(l.adjusted_qty_in, 0) AS adjusted_qty_in,
+    COALESCE(l.adjusted_qty_out, 0) AS adjusted_qty_out,
+    COALESCE(l.sale_qty, 0) AS sale_qty,
+    0 AS committed_qty,
+    COALESCE(l.current_qty, 0) AS current_qty,
+    COALESCE(l.current_qty, 0) AS available_stock
+FROM AllProducts ap
+LEFT JOIN Ledger l ON ap.product_id = l.product_id AND ap.product_type = l.product_type
 `
 
 // SQL for SPECIFIC warehouse (with warehouse filter)
 const inventorySummarySqlOneWarehouse = `
-WITH InventorySummary AS (
+WITH Ledger AS (
     SELECT
-        COUNT(*) AS count,
-        product_id,
-        product_type,
-        batch_number,
-        SUM(opening_qty) AS opening_qty,
-        SUM(order_qty) AS order_qty,
-        SUM(received_qty) AS received_qty,
-        SUM(sale_qty) AS sale_qty,
-        SUM(transfer_qty_in) AS transfer_qty_in,
-        SUM(ABS(transfer_qty_out)) AS transfer_qty_out,
-        SUM(adjusted_qty_in) AS adjusted_qty_in,
-        SUM(ABS(adjusted_qty_out)) AS adjusted_qty_out,
-        SUM(committed_qty) AS committed_qty,
-        SUM(received_qty + adjusted_qty_in + transfer_qty_in - sale_qty - abs(adjusted_qty_out) - abs(transfer_qty_out)) AS current_qty
-    FROM stock_summary_daily_balances
-    WHERE transaction_date <= @toDate
-        AND business_id = @businessId
-        AND warehouse_id = @warehouseId
-    GROUP BY product_id, product_type, batch_number
+        sh.product_id,
+        sh.product_type,
+        SUM(CASE WHEN sh.reference_type IN ('POS','PGOS','PCOS') THEN sh.qty ELSE 0 END) AS opening_qty,
+        SUM(CASE WHEN sh.reference_type IN ('BL','CN') AND sh.qty > 0 THEN sh.qty ELSE 0 END) AS received_qty,
+        SUM(CASE WHEN sh.reference_type = 'IV' THEN ABS(sh.qty) ELSE 0 END) AS sale_qty,
+        SUM(CASE WHEN sh.reference_type = 'TO' AND sh.is_transfer_in = true THEN sh.qty ELSE 0 END) AS transfer_qty_in,
+        SUM(CASE WHEN sh.reference_type = 'TO' AND sh.is_transfer_in = false THEN ABS(sh.qty) ELSE 0 END) AS transfer_qty_out,
+        SUM(CASE WHEN sh.reference_type = 'IVAQ' AND sh.qty > 0 THEN sh.qty ELSE 0 END) AS adjusted_qty_in,
+        SUM(CASE WHEN sh.reference_type = 'IVAQ' AND sh.qty < 0 THEN ABS(sh.qty) ELSE 0 END) AS adjusted_qty_out,
+        SUM(sh.qty) AS current_qty
+    FROM stock_histories sh
+    WHERE sh.business_id = @businessId
+      AND sh.stock_date <= @toDate
+      AND sh.warehouse_id = @warehouseId
+      AND sh.is_reversal = 0
+      AND sh.reversed_by_stock_history_id IS NULL
+    GROUP BY sh.product_id, sh.product_type
 ),
 AllProducts AS (
-    SELECT
-        id AS product_id,
-        NAME AS product_name,
-        unit_id AS product_unit_id,
-        sku AS product_sku,
-        'S' AS product_type
+    SELECT id AS product_id, NAME AS product_name, unit_id AS product_unit_id, sku AS product_sku, 'S' AS product_type
     FROM products
     WHERE business_id = @businessId
     UNION
-    SELECT
-        id AS product_id,
-        NAME AS product_name,
-        unit_id AS product_unit_id,
-        sku AS product_sku,
-        'V' AS product_type
+    SELECT id AS product_id, NAME AS product_name, unit_id AS product_unit_id, sku AS product_sku, 'V' AS product_type
     FROM product_variants
     WHERE business_id = @businessId
 )
 SELECT
-    InventorySummary.*,
-    AllProducts.product_name,
-    AllProducts.product_unit_id,
-    AllProducts.product_sku,
-    current_qty - committed_qty AS available_stock
-FROM InventorySummary
-LEFT JOIN AllProducts ON InventorySummary.product_type = AllProducts.product_type
-    AND InventorySummary.product_id = AllProducts.product_id
+    ap.product_id,
+    ap.product_type,
+    ap.product_name,
+    ap.product_unit_id,
+    ap.product_sku,
+    COALESCE(l.opening_qty, 0) AS opening_qty,
+    0 AS order_qty,
+    COALESCE(l.received_qty, 0) AS received_qty,
+    COALESCE(l.transfer_qty_in, 0) AS transfer_qty_in,
+    COALESCE(l.transfer_qty_out, 0) AS transfer_qty_out,
+    COALESCE(l.adjusted_qty_in, 0) AS adjusted_qty_in,
+    COALESCE(l.adjusted_qty_out, 0) AS adjusted_qty_out,
+    COALESCE(l.sale_qty, 0) AS sale_qty,
+    0 AS committed_qty,
+    COALESCE(l.current_qty, 0) AS current_qty,
+    COALESCE(l.current_qty, 0) AS available_stock
+FROM AllProducts ap
+LEFT JOIN Ledger l ON ap.product_id = l.product_id AND ap.product_type = l.product_type
 `
 
 func GetInventorySummaryReport(ctx context.Context, toDate models.MyDateString, warehouseId *int) ([]*InventorySummaryResponse, error) {

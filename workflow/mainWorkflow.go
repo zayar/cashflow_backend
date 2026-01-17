@@ -1402,6 +1402,10 @@ func ProcessValueAdjustmentStocks(tx *gorm.DB, logger *logrus.Logger, stockHisto
 		return accountIds, err
 	}
 
+	if err := ensureNonNegativeForKeys(tx, logger, stockHistories); err != nil {
+		return accountIds, err
+	}
+
 	return accountIds, err
 }
 
@@ -1479,7 +1483,68 @@ func ProcessValueAdjustmentStocksDeletion(tx *gorm.DB, logger *logrus.Logger, st
 		return accountIds, err
 	}
 
+	if err := ensureNonNegativeForKeys(tx, logger, stockHistories); err != nil {
+		return accountIds, err
+	}
+
 	return accountIds, err
+}
+
+// ensureNonNegativeForKeys validates that cumulative quantity never drops below zero for the affected item/warehouse keys.
+func ensureNonNegativeForKeys(tx *gorm.DB, logger *logrus.Logger, stockHistories []*models.StockHistory) error {
+	type key struct {
+		BusinessId  string
+		WarehouseId int
+		ProductId   int
+		ProductType models.ProductType
+		Batch       string
+	}
+	seen := make(map[key]struct{})
+	for _, sh := range stockHistories {
+		if sh == nil {
+			continue
+		}
+		k := key{
+			BusinessId:  sh.BusinessId,
+			WarehouseId: sh.WarehouseId,
+			ProductId:   sh.ProductId,
+			ProductType: sh.ProductType,
+			Batch:       sh.BatchNumber,
+		}
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+
+		var minQty decimal.Decimal
+		err := tx.Raw(`
+			SELECT MIN(running_qty) AS min_qty
+			FROM (
+				SELECT
+					SUM(qty) OVER (
+						PARTITION BY warehouse_id, product_id, product_type, COALESCE(batch_number,'')
+						ORDER BY stock_date, cumulative_sequence, id
+						ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+					) AS running_qty
+				FROM stock_histories
+				WHERE business_id = ?
+				  AND warehouse_id = ?
+				  AND product_id = ?
+				  AND product_type = ?
+				  AND COALESCE(batch_number,'') = ?
+				  AND is_reversal = 0
+				  AND reversed_by_stock_history_id IS NULL
+			) t
+		`, k.BusinessId, k.WarehouseId, k.ProductId, k.ProductType, k.Batch).Scan(&minQty).Error
+		if err != nil {
+			config.LogError(logger, "MainWorkflow.go", "ensureNonNegativeForKeys", "min_running_qty", k, err)
+			return err
+		}
+		if minQty.LessThan(decimal.Zero) {
+			return fmt.Errorf("inventory would become negative for product_id=%d product_type=%s warehouse_id=%d batch=%s", k.ProductId, string(k.ProductType), k.WarehouseId, k.Batch)
+		}
+	}
+	return nil
 }
 
 // Process Incoming Stock
