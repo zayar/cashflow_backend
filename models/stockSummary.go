@@ -292,16 +292,44 @@ func GetAvailableStocks(ctx context.Context, warehouseId int) ([]*StockSummary, 
 		return nil, errors.New("warehouse not found")
 	}
 
-	var stockSummaries []*StockSummary
+	// Canonical: compute from ledger-of-record (stock_histories) to avoid stale caches.
+	// Note: We intentionally aggregate across batches here (one row per product),
+	// because most UI callers want "available qty per product" for the warehouse.
 	db := config.GetDB()
-	if err := db.WithContext(ctx).
-		Where("business_id = ?", businessId).
-		Where("warehouse_id = ?", warehouseId).
-		Not("current_qty = 0").
-		Find(&stockSummaries).Error; err != nil {
+	type row struct {
+		ProductId   int             `gorm:"column:product_id"`
+		ProductType ProductType     `gorm:"column:product_type"`
+		CurrentQty  decimal.Decimal `gorm:"column:current_qty"`
+	}
+	var rows []row
+	if err := db.WithContext(ctx).Raw(`
+		SELECT
+			product_id,
+			product_type,
+			COALESCE(SUM(qty), 0) AS current_qty
+		FROM stock_histories
+		WHERE business_id = ?
+		  AND warehouse_id = ?
+		  AND is_reversal = 0
+		  AND reversed_by_stock_history_id IS NULL
+		GROUP BY product_id, product_type
+		HAVING COALESCE(SUM(qty), 0) <> 0
+	`, businessId, warehouseId).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
-	return stockSummaries, nil
+
+	out := make([]*StockSummary, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, &StockSummary{
+			BusinessId:  businessId,
+			WarehouseId: warehouseId,
+			ProductId:   r.ProductId,
+			ProductType: r.ProductType,
+			BatchNumber: "",
+			CurrentQty:  r.CurrentQty,
+		})
+	}
+	return out, nil
 }
 
 func GetStockInHand(ctx context.Context, productId int, productType string) (decimal.Decimal, error) {
