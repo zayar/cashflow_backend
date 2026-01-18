@@ -185,8 +185,13 @@ func CreateOpeningStockGroup(ctx context.Context, groupId int, input []*NewOpeni
 	groupOpeningStockDetails := make([]ProductGroupOpeningStockDetail, 0)
 	for _, openingStock := range input {
 
-		if !openingStock.Qty.IsPositive() {
-			continue
+		if openingStock.WarehouseId <= 0 {
+			tx.Rollback()
+			return nil, errors.New("warehouse is required for opening stock")
+		}
+		if openingStock.Qty.LessThanOrEqual(decimal.Zero) {
+			tx.Rollback()
+			return nil, errors.New("opening stock qty must be positive")
 		}
 		// check if variant belongs to the group and inventory account exists
 		var variant ProductVariant
@@ -213,7 +218,7 @@ func CreateOpeningStockGroup(ctx context.Context, groupId int, input []*NewOpeni
 		inventoryAccountId = variant.InventoryAccountId
 
 		// create opening stock
-		if err := UpdateStockSummaryReceivedQty(tx, businessId, openingStock.WarehouseId, openingStock.ProductVariantId, string(ProductTypeVariant), "", openingStock.Qty, business.MigrationDate); err != nil {
+		if err := UpdateStockSummaryOpeningQty(tx, businessId, openingStock.WarehouseId, openingStock.ProductVariantId, string(ProductTypeVariant), "", openingStock.Qty, business.MigrationDate); err != nil {
 			tx.Rollback()
 			return nil, err
 		}

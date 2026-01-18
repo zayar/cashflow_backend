@@ -21,6 +21,7 @@ func main() {
 	warehouseID := flag.Int("warehouse-id", 0, "Optional: warehouse id")
 	batchNumber := flag.String("batch", "", "Optional: batch number (default empty)")
 	fromDateStr := flag.String("from", "", "Optional: rebuild from date (YYYY-MM-DD). Defaults to earliest ledger date for the key.")
+	continueOnError := flag.Bool("continue-on-error", false, "Skip failing keys and continue rebuilding others")
 	flag.Parse()
 
 	if strings.TrimSpace(*businessID) == "" {
@@ -110,6 +111,10 @@ func main() {
 			}
 			return nil
 		}); err != nil {
+			if *continueOnError {
+				fmt.Fprintf(os.Stderr, "rebuild failed (skipping): %v\n", err)
+				continue
+			}
 			fmt.Fprintf(os.Stderr, "rebuild failed: %v\n", err)
 			os.Exit(1)
 		}

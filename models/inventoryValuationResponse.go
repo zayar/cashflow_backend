@@ -165,47 +165,6 @@ WHERE
 			excludeOpeningOnFromDate = true
 		}
 
-		// Fallback: some datasets create opening stock rows during product creation but rely on async outbox
-		// to post stock_histories. If that async posting hasn't happened yet, opening stock won't appear in
-		// stock_histories. We can still compute opening stock from the opening_stocks table (scoped to business)
-		// to avoid "Opening Stock = 0" and negative stock-on-hand in the report.
-		if !excludeOpeningOnFromDate && response.OpeningStockOnHand.IsZero() && response.OpeningAssetValue.IsZero() {
-			openingStocksFallbackSQLT := `
-SELECT
-	COALESCE(SUM(os.qty * os.unit_value), 0) AS opening_asset_value,
-	COALESCE(SUM(os.qty), 0) AS opening_stock_on_hand
-FROM opening_stocks os
-{{- if eq .productType "S" }}
-	INNER JOIN products p ON p.id = os.product_id AND p.business_id = @businessId
-{{- else if eq .productType "V" }}
-	INNER JOIN product_variants pv ON pv.id = os.product_id AND pv.business_id = @businessId
-{{- else }}
-	-- No fallback available for this productType in opening_stocks
-	INNER JOIN products p ON 1 = 0
-{{- end }}
-WHERE
-	os.product_id = @productId
-	AND os.product_type = @productType
-	{{- if gt .warehouseId 0 }}
-	AND os.warehouse_id = @warehouseId
-	{{- end }}
-`
-			openingStocksFallbackSQL, err := utils.ExecTemplate(openingStocksFallbackSQLT, map[string]interface{}{
-				"warehouseId": warehouseId,
-				"productType": string(productType),
-			})
-			if err != nil {
-				return nil, err
-			}
-			if err := db.WithContext(ctx).Raw(openingStocksFallbackSQL, map[string]interface{}{
-				"businessId":  businessId,
-				"productId":   productId,
-				"productType": productType,
-				"warehouseId": warehouseId,
-			}).Scan(&response).Error; err != nil {
-				return nil, err
-			}
-		}
 	}
 
 	var details []*InventoryValuationDetail

@@ -741,102 +741,13 @@ func calculateCogs(tx *gorm.DB, logger *logrus.Logger, productDetail ProductDeta
 		}
 
 		if processQty.GreaterThan(decimal.Zero) {
-			// Fallback: if PurchasePrice is 0 and no incoming stock histories found, try to find opening stock
-			unitValue := productDetail.PurchasePrice
-			if unitValue.IsZero() && len(incomingStockHistories) == 0 {
-				var openingStock models.StockHistory
-				err := tx.Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND reference_type = ? AND is_outgoing = false AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
-					outStock.BusinessId, outStock.WarehouseId, outStock.ProductId, outStock.ProductType, outStock.BatchNumber, models.StockReferenceTypeProductOpeningStock).
-					Order("stock_date ASC, id ASC").
-					First(&openingStock).Error
-				if err == nil && !openingStock.BaseUnitValue.IsZero() {
-					unitValue = openingStock.BaseUnitValue
-					logger.WithFields(logrus.Fields{
-						"function":                      "CalculateCogs",
-						"product_id":                    outStock.ProductId,
-						"warehouse_id":                  outStock.WarehouseId,
-						"opening_stock_base_unit_value": unitValue.String(),
-					}).Info("Fallback to opening stock base_unit_value because PurchasePrice is 0 and no incoming stock histories found")
-				}
-				if unitValue.IsZero() {
-					type openingFallback struct {
-						TotalQty   decimal.Decimal `gorm:"column:total_qty"`
-						TotalValue decimal.Decimal `gorm:"column:total_value"`
-					}
-					var fallback openingFallback
-					if outStock.ProductType == models.ProductTypeSingle {
-						err = tx.Raw(`
-							SELECT
-								COALESCE(SUM(os.qty), 0) AS total_qty,
-								COALESCE(SUM(os.qty * os.unit_value), 0) AS total_value
-							FROM opening_stocks os
-							INNER JOIN products p ON p.id = os.product_id AND p.business_id = ?
-							WHERE os.product_id = ? AND os.product_type = ? AND os.warehouse_id = ?
-						`, outStock.BusinessId, outStock.ProductId, outStock.ProductType, outStock.WarehouseId).Scan(&fallback).Error
-					} else if outStock.ProductType == models.ProductTypeVariant {
-						err = tx.Raw(`
-							SELECT
-								COALESCE(SUM(os.qty), 0) AS total_qty,
-								COALESCE(SUM(os.qty * os.unit_value), 0) AS total_value
-							FROM opening_stocks os
-							INNER JOIN product_variants pv ON pv.id = os.product_id AND pv.business_id = ?
-							WHERE os.product_id = ? AND os.product_type = ? AND os.warehouse_id = ?
-						`, outStock.BusinessId, outStock.ProductId, outStock.ProductType, outStock.WarehouseId).Scan(&fallback).Error
-					}
-					if err != nil {
-						config.LogError(logger, "MainWorkflow.go", "CalculateCogs", "OpeningStocksFallback", outStock, err)
-						return accountIds, err
-					}
-					if !fallback.TotalQty.IsZero() {
-						unitValue = fallback.TotalValue.Div(fallback.TotalQty)
-						if logger != nil {
-							logger.WithFields(logrus.Fields{
-								"function":                      "CalculateCogs",
-								"product_id":                    outStock.ProductId,
-								"warehouse_id":                  outStock.WarehouseId,
-								"opening_stocks_base_unit_value": unitValue.String(),
-							}).Info("Fallback to opening_stocks unit_value because PurchasePrice is 0 and no incoming stock histories found")
-						}
-					}
-				}
-			}
-			if existing, found := uniqueStocks[fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d", outStock.WarehouseId, outStock.ProductId, outStock.ProductType, outStock.BatchNumber, outStock.ReferenceID, outStock.ReferenceType, outStock.ReferenceDetailID)]; found {
-				existing.TotalQty = existing.TotalQty.Add(processQty)
-				existing.TotalValue = existing.TotalValue.Add(processQty.Mul(unitValue))
-				uniqueStocks[fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d", outStock.WarehouseId, outStock.ProductId, outStock.ProductType, outStock.BatchNumber, outStock.ReferenceID, outStock.ReferenceType, outStock.ReferenceDetailID)] = existing
-			} else {
-				uniqueStocks[fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d", outStock.WarehouseId, outStock.ProductId, outStock.ProductType, outStock.BatchNumber, outStock.ReferenceID, outStock.ReferenceType, outStock.ReferenceDetailID)] = StockHistoryFragment{
-					BusinessId:        outStock.BusinessId,
-					WarehouseId:       outStock.WarehouseId,
-					ProductId:         outStock.ProductId,
-					ProductType:       outStock.ProductType,
-					BatchNumber:       outStock.BatchNumber,
-					ReferenceId:       outStock.ReferenceID,
-					ReferenceType:     outStock.ReferenceType,
-					ReferenceDetailId: outStock.ReferenceDetailID,
-					TotalQty:          processQty,
-					TotalValue:        processQty.Mul(unitValue),
-				}
-			}
-			if existing, found := uniqueStockDetails[fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d-%s", outStock.WarehouseId, outStock.ProductId, outStock.ProductType, outStock.BatchNumber, outStock.ReferenceID, outStock.ReferenceType, outStock.ReferenceDetailID, unitValue)]; found {
-				existing.Qty = existing.Qty.Add(processQty)
-				uniqueStockDetails[fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d-%s", outStock.WarehouseId, outStock.ProductId, outStock.ProductType, outStock.BatchNumber, outStock.ReferenceID, outStock.ReferenceType, outStock.ReferenceDetailID, unitValue)] = existing
-			} else {
-				uniqueStockDetails[fmt.Sprintf("%d-%d-%s-%s-%d-%s-%d-%s", outStock.WarehouseId, outStock.ProductId, outStock.ProductType, outStock.BatchNumber, outStock.ReferenceID, outStock.ReferenceType, outStock.ReferenceDetailID, unitValue)] = StockHistoryDetailFragment{
-					BusinessId:        outStock.BusinessId,
-					WarehouseId:       outStock.WarehouseId,
-					ProductId:         outStock.ProductId,
-					ProductType:       outStock.ProductType,
-					BatchNumber:       outStock.BatchNumber,
-					StockDate:         outStock.StockDate,
-					Description:       outStock.Description,
-					ReferenceId:       outStock.ReferenceID,
-					ReferenceType:     outStock.ReferenceType,
-					ReferenceDetailId: outStock.ReferenceDetailID,
-					Qty:               processQty,
-					BaseUnitValue:     unitValue,
-				}
-			}
+			return accountIds, fmt.Errorf("insufficient FIFO layers for product_id=%d product_type=%s warehouse_id=%d batch=%s qty_missing=%s",
+				outStock.ProductId,
+				string(outStock.ProductType),
+				outStock.WarehouseId,
+				outStock.BatchNumber,
+				processQty.String(),
+			)
 		}
 	}
 
@@ -1789,6 +1700,10 @@ func ProcessOutgoingStocks(tx *gorm.DB, logger *logrus.Logger, stockHistories []
 	err = UpdateStockClosingBalances(tx, stockHistories, lastStockHistoriesAll)
 	if err != nil {
 		config.LogError(logger, "MainWorkflow.go", "ProcessOutgoingStocks", "UpdateStockClosingBalances", stockHistories, err)
+		return accountIds, err
+	}
+
+	if err := ensureNonNegativeForKeys(tx, logger, stockHistories); err != nil {
 		return accountIds, err
 	}
 

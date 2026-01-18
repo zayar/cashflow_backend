@@ -282,6 +282,12 @@ func (input *NewProduct) validate(ctx context.Context, businessId string, id int
 	if len(input.OpeningStocks) > 0 {
 		var warehouseIds []int
 		for _, openingStock := range input.OpeningStocks {
+			if openingStock.WarehouseId <= 0 {
+				return errors.New("warehouse is required for opening stock")
+			}
+			if openingStock.Qty.LessThanOrEqual(decimal.Zero) {
+				return errors.New("opening stock qty must be positive")
+			}
 			if slices.Contains(warehouseIds, openingStock.WarehouseId) {
 				return errors.New("duplicate warehouse")
 			}
@@ -390,7 +396,7 @@ func CreateProduct(ctx context.Context, input *NewProduct) (*Product, error) {
 
 		openingStockDetails := make([]ProductOpeningStockDetail, 0)
 		for _, openingStock := range input.OpeningStocks {
-			UpdateStockSummaryReceivedQty(tx, businessId, openingStock.WarehouseId, product.ID, string(ProductTypeSingle), "", openingStock.Qty, business.MigrationDate)
+			UpdateStockSummaryOpeningQty(tx, businessId, openingStock.WarehouseId, product.ID, string(ProductTypeSingle), "", openingStock.Qty, business.MigrationDate)
 			openingStockDetails = append(openingStockDetails, ProductOpeningStockDetail{
 				BatchNumber: openingStock.BatchNumber,
 				WarehouseId: openingStock.WarehouseId,
