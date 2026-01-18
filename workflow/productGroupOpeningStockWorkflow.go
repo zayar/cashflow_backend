@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"encoding/json"
+	"errors"
 	"strconv"
 
 	"github.com/mmdatafocus/books_backend/config"
@@ -72,6 +73,19 @@ func CreateProductGroupOpeningStock(tx *gorm.DB, logger *logrus.Logger, recordId
 			amount = decimal.NewFromInt(0)
 		}
 		warehouseTotalAmounts[detail.WarehouseId] = amount.Add(detail.Qty.Mul(detail.UnitValue))
+
+		existing := new(models.StockHistory)
+		findErr := tx.
+			Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND reference_type = ? AND reference_id = ? AND is_outgoing = false AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
+				businessId, detail.WarehouseId, detail.ProductVariantId, models.ProductTypeVariant, detail.BatchNumber, models.StockReferenceTypeProductGroupOpeningStock, openingStock.ProductGroupId).
+			First(existing).Error
+		if findErr == nil {
+			stockHistories = append(stockHistories, existing)
+			continue
+		}
+		if !errors.Is(findErr, gorm.ErrRecordNotFound) {
+			return nil, 0, nil, findErr
+		}
 
 		stockHistory := models.StockHistory{
 			BusinessId:        businessId,
@@ -166,7 +180,7 @@ func CreateProductGroupOpeningStock(tx *gorm.DB, logger *logrus.Logger, recordId
 			return nil, 0, nil, err
 		}
 
-		err = UpdateStockClosingBalances(tx, stockHistories, nil)
+		err = models.UpdateStockClosingBalances(tx, stockHistories, nil)
 		if err != nil {
 			config.LogError(logger, "ProductGroupOpeningStockWorkflow.go", "CreateProductGroupOpeningStock", "UpdateStockClosingBalances", journal, err)
 			return nil, 0, nil, err

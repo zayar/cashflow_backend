@@ -39,4 +39,8 @@ func MigrateTable() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	if err := EnsureInventoryLedgerSchema(); err != nil {
+		log.Fatal(err)
+	}
 }

@@ -166,6 +166,11 @@ func CreateOpeningStockGroup(ctx context.Context, groupId int, input []*NewOpeni
 		return nil, err
 	}
 
+	stockDate, err := utils.ConvertToDate(business.MigrationDate, business.Timezone)
+	if err != nil {
+		return nil, err
+	}
+
 	db := config.GetDB()
 	tx := db.Begin()
 
@@ -180,6 +185,7 @@ func CreateOpeningStockGroup(ctx context.Context, groupId int, input []*NewOpeni
 
 	// create stocks one by one
 	productStocks := make([]*ProductStock, 0, len(input))
+	stockHistories := make([]*StockHistory, 0, len(input))
 	var count int64
 	var inventoryAccountId int
 	groupOpeningStockDetails := make([]ProductGroupOpeningStockDetail, 0)
@@ -217,8 +223,29 @@ func CreateOpeningStockGroup(ctx context.Context, groupId int, input []*NewOpeni
 
 		inventoryAccountId = variant.InventoryAccountId
 
+		stockHistory := StockHistory{
+			BusinessId:        businessId,
+			WarehouseId:       openingStock.WarehouseId,
+			ProductId:         openingStock.ProductVariantId,
+			ProductType:       ProductTypeVariant,
+			BatchNumber:       openingStock.BatchNumber,
+			StockDate:         stockDate,
+			Qty:               openingStock.Qty,
+			Description:       "Opening Stock",
+			ReferenceType:     StockReferenceTypeProductGroupOpeningStock,
+			ReferenceID:       groupId,
+			ReferenceDetailID: 0,
+			IsOutgoing:        utils.NewFalse(),
+			BaseUnitValue:     openingStock.UnitValue,
+		}
+		if err := tx.Create(&stockHistory).Error; err != nil {
+			tx.Rollback()
+			return nil, err
+		}
+		stockHistories = append(stockHistories, &stockHistory)
+
 		// create opening stock
-		if err := UpdateStockSummaryOpeningQty(tx, businessId, openingStock.WarehouseId, openingStock.ProductVariantId, string(ProductTypeVariant), "", openingStock.Qty, business.MigrationDate); err != nil {
+		if err := UpdateStockSummaryOpeningQty(tx, businessId, openingStock.WarehouseId, openingStock.ProductVariantId, string(ProductTypeVariant), "", openingStock.Qty, stockDate); err != nil {
 			tx.Rollback()
 			return nil, err
 		}
@@ -252,10 +279,15 @@ func CreateOpeningStockGroup(ctx context.Context, groupId int, input []*NewOpeni
 			ProductId:    openingStock.ProductVariantId,
 			ProductType:  ProductTypeVariant,
 			BatchNumber:  openingStock.BatchNumber,
-			ReceivedDate: business.MigrationDate,
+			ReceivedDate: stockDate,
 			Qty:          openingStock.Qty,
 		}
 		productStocks = append(productStocks, &pStock)
+	}
+
+	if err := UpdateStockClosingBalances(tx, stockHistories, nil); err != nil {
+		tx.Rollback()
+		return nil, err
 	}
 
 	productGroupOpeningStock := ProductGroupOpeningStock{

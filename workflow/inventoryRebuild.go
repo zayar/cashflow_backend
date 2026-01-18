@@ -156,7 +156,7 @@ func RebuildInventoryForItemWarehouseFromDate(
 		if err != nil {
 			return nil, err
 		}
-		if err := UpdateStockClosingBalances(tx, combined, lastAll); err != nil {
+		if err := models.UpdateStockClosingBalances(tx, combined, lastAll); err != nil {
 			return nil, err
 		}
 	}
