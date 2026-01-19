@@ -49,8 +49,8 @@ func PaginateAccountTransactionReport(ctx context.Context, limit *int, after *st
 
 	// temp
 	dbCtx = dbCtx.Where("transaction_date_time BETWEEN ? AND ?", fromDate, toDate)
-	// Hide reversal journals from the transactional report by default.
-	dbCtx = dbCtx.Where("journal_id IN (SELECT id FROM account_journals WHERE business_id = ? AND is_reversal = 0)", businessID)
+	// Hide reversal journals AND journals that have been reversed.
+	dbCtx = dbCtx.Where("journal_id IN (SELECT id FROM account_journals WHERE business_id = ? AND is_reversal = 0 AND reversed_by_journal_id IS NULL)", businessID)
 	if len(accountIds) > 0 {
 		dbCtx.Where("account_id IN ?", accountIds)
 	}
@@ -128,8 +128,8 @@ func GetAllAccountTransactionReport(ctx context.Context, fromDate models.MyDateS
 
 	// temp
 	dbCtx = dbCtx.Where("transaction_date_time BETWEEN ? AND ?", fromDate, toDate)
-	// Hide reversal journals from the transactional report by default.
-	dbCtx = dbCtx.Where("journal_id IN (SELECT id FROM account_journals WHERE business_id = ? AND is_reversal = 0)", businessID)
+	// Hide reversal journals AND journals that have been reversed.
+	dbCtx = dbCtx.Where("journal_id IN (SELECT id FROM account_journals WHERE business_id = ? AND is_reversal = 0 AND reversed_by_journal_id IS NULL)", businessID)
 	if len(accountIds) > 0 {
 		dbCtx.Where("account_id IN ?", accountIds)
 	}
