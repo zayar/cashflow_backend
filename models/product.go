@@ -607,9 +607,39 @@ func UpdateProduct(ctx context.Context, id int, input *NewProduct) (*Product, er
 			tx.Rollback()
 			return nil, err
 		}
+		stockDate, err := utils.ConvertToDate(business.MigrationDate, business.Timezone)
+		if err != nil {
+			tx.Rollback()
+			return nil, err
+		}
 		openingStockDetails := make([]ProductOpeningStockDetail, 0)
+		stockHistories := make([]*StockHistory, 0, len(input.OpeningStocks))
 		for _, openingStock := range input.OpeningStocks {
-			UpdateStockSummaryReceivedQty(tx, businessId, openingStock.WarehouseId, product.ID, string(ProductTypeSingle), "", openingStock.Qty, business.MigrationDate)
+			stockHistory := StockHistory{
+				BusinessId:        businessId,
+				WarehouseId:       openingStock.WarehouseId,
+				ProductId:         product.ID,
+				ProductType:       ProductTypeSingle,
+				BatchNumber:       openingStock.BatchNumber,
+				StockDate:         stockDate,
+				Qty:               openingStock.Qty,
+				Description:       "Opening Stock",
+				ReferenceType:     StockReferenceTypeProductOpeningStock,
+				ReferenceID:       product.ID,
+				ReferenceDetailID: 0,
+				IsOutgoing:        utils.NewFalse(),
+				BaseUnitValue:     openingStock.UnitValue,
+			}
+			if err := tx.Create(&stockHistory).Error; err != nil {
+				tx.Rollback()
+				return nil, err
+			}
+			stockHistories = append(stockHistories, &stockHistory)
+
+			if err := UpdateStockSummaryOpeningQty(tx, businessId, openingStock.WarehouseId, product.ID, string(ProductTypeSingle), "", openingStock.Qty, stockDate); err != nil {
+				tx.Rollback()
+				return nil, err
+			}
 			openingStockDetails = append(openingStockDetails, ProductOpeningStockDetail{
 				BatchNumber: openingStock.BatchNumber,
 				WarehouseId: openingStock.WarehouseId,
@@ -629,6 +659,10 @@ func UpdateProduct(ctx context.Context, id int, input *NewProduct) (*Product, er
 				tx.Rollback()
 				return nil, err
 			}
+		}
+		if err := UpdateStockClosingBalances(tx, stockHistories, nil); err != nil {
+			tx.Rollback()
+			return nil, err
 		}
 		productOpeningStock := ProductOpeningStock{
 			InventoryAccountId: input.InventoryAccountId,
@@ -873,7 +907,7 @@ func GetProductStocks(ctx context.Context, productId int, productType string, wa
 		return nil, err
 	}
 
-	var stocks []*ProductStock
+	stocks := make([]*ProductStock, 0)
 
 	dbCtx := db.WithContext(ctx).Where("product_id = ?", product.GetId())
 
