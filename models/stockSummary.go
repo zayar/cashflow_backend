@@ -316,11 +316,15 @@ func GetAvailableStocks(ctx context.Context, warehouseId int, asOf *MyDateString
 		if r.StockOnHand.IsZero() {
 			continue
 		}
+		pt := r.ProductType
+		if pt == "" {
+			pt = ProductTypeSingle
+		}
 		out = append(out, &StockSummary{
 			BusinessId:  businessId,
 			WarehouseId: warehouseId,
 			ProductId:   r.ProductId,
-			ProductType: r.ProductType,
+			ProductType: pt,
 			BatchNumber: "",
 			CurrentQty:  r.StockOnHand,
 		})
