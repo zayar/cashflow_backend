@@ -3,6 +3,7 @@ package workflow
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 
 	"github.com/mmdatafocus/books_backend/config"
@@ -67,7 +68,14 @@ func CreateProductGroupOpeningStock(tx *gorm.DB, logger *logrus.Logger, recordId
 		return nil, 0, nil, err
 	}
 
+	ctx := tx.Statement.Context
 	for _, detail := range openingStock.Details {
+		if detail.WarehouseId <= 0 {
+			return nil, 0, nil, fmt.Errorf("opening stock warehouse is required")
+		}
+		if err := utils.ValidateResourceId[models.Warehouse](ctx, businessId, detail.WarehouseId); err != nil {
+			return nil, 0, nil, err
+		}
 		amount, ok := warehouseTotalAmounts[detail.WarehouseId]
 		if !ok {
 			amount = decimal.NewFromInt(0)

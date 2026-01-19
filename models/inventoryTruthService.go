@@ -54,19 +54,19 @@ func computeLedgerSnapshots(ctx context.Context, asOf time.Time, warehouseId *in
 	`
 	if warehouseId != nil && *warehouseId > 0 {
 		where += " AND warehouse_id = @warehouseId"
-		args["warehouseId"] = warehouseId
+		args["warehouseId"] = *warehouseId
 	}
 	if productId != nil && *productId > 0 {
 		where += " AND product_id = @productId"
-		args["productId"] = productId
+		args["productId"] = *productId
 	}
 	if productType != nil {
 		where += " AND product_type = @productType"
-		args["productType"] = productType
+		args["productType"] = *productType
 	}
 	if batchNumber != nil {
 		where += " AND COALESCE(batch_number, '') = @batchNumber"
-		args["batchNumber"] = batchNumber
+		args["batchNumber"] = *batchNumber
 	}
 
 	group := "product_id, product_type"
