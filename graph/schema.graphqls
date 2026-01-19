@@ -4402,7 +4402,7 @@ type Query {
     endDate: MyDateString
   ): InventoryAdjustmentsConnection @goField(forceResolver: true) @auth
 
-  getAvailableStocks(warehouseId: Int!): [StockSummary]
+  getAvailableStocks(warehouseId: Int!, asOf: MyDateString): [StockSummary]
     @goField(forceResolver: true)
     @auth
   getInventorySummaryReport(

@@ -703,7 +703,7 @@ func (r *inventoryAdjustmentDetailResolver) Stocks(ctx context.Context, obj *mod
 }
 
 // ProductUnit is the resolver for the productUnit field.
-func (r *inventorySummaryResponseResolver) ProductUnit(ctx context.Context, obj *reports.InventorySummaryResponse) (*models.AllProductUnit, error) {
+func (r *inventorySummaryResponseResolver) ProductUnit(ctx context.Context, obj *models.InventorySummaryResponse) (*models.AllProductUnit, error) {
 	return middlewares.GetAllProductUnit(ctx, obj.ProductUnitId)
 }
 
@@ -713,7 +713,7 @@ func (r *inventoryValuationResolver) ProductUnit(ctx context.Context, obj *model
 }
 
 // Unit is the resolver for the unit field.
-func (r *inventoryValuationSummaryResponseResolver) Unit(ctx context.Context, obj *reports.InventoryValuationSummaryResponse) (string, error) {
+func (r *inventoryValuationSummaryResponseResolver) Unit(ctx context.Context, obj *models.InventoryValuationSummaryResponse) (string, error) {
 	allPu, err := middlewares.GetAllProductUnit(ctx, obj.ProductUnitId)
 	if err != nil {
 		return "", err
@@ -2744,17 +2744,17 @@ func (r *queryResolver) PaginateInventoryAdjustment(ctx context.Context, limit *
 }
 
 // GetAvailableStocks is the resolver for the getAvailableStocks field.
-func (r *queryResolver) GetAvailableStocks(ctx context.Context, warehouseID int) ([]*models.StockSummary, error) {
-	return models.GetAvailableStocks(ctx, warehouseID)
+func (r *queryResolver) GetAvailableStocks(ctx context.Context, warehouseID int, asOf *models.MyDateString) ([]*models.StockSummary, error) {
+	return models.GetAvailableStocks(ctx, warehouseID, asOf)
 }
 
 // GetInventorySummaryReport is the resolver for the getInventorySummaryReport field.
-func (r *queryResolver) GetInventorySummaryReport(ctx context.Context, toDate models.MyDateString, warehouseID *int) ([]*reports.InventorySummaryResponse, error) {
+func (r *queryResolver) GetInventorySummaryReport(ctx context.Context, toDate models.MyDateString, warehouseID *int) ([]*models.InventorySummaryResponse, error) {
 	return reports.GetInventorySummaryReport(ctx, toDate, warehouseID)
 }
 
 // GetWarehouseInventoryReport is the resolver for the getWarehouseInventoryReport field.
-func (r *queryResolver) GetWarehouseInventoryReport(ctx context.Context, toDate models.MyDateString) ([]*reports.WarehouseInventoryResponse, error) {
+func (r *queryResolver) GetWarehouseInventoryReport(ctx context.Context, toDate models.MyDateString) ([]*models.WarehouseInventoryResponse, error) {
 	return reports.GetWarehouseInventoryReport(ctx, toDate)
 }
 
@@ -2884,7 +2884,7 @@ func (r *queryResolver) GetReceivableDetailReport(ctx context.Context, startDate
 }
 
 // GetInventoryValuationSummaryReport is the resolver for the getInventoryValuationSummaryReport field.
-func (r *queryResolver) GetInventoryValuationSummaryReport(ctx context.Context, currentDate models.MyDateString, warehouseID int) ([]*reports.InventoryValuationSummaryResponse, error) {
+func (r *queryResolver) GetInventoryValuationSummaryReport(ctx context.Context, currentDate models.MyDateString, warehouseID int) ([]*models.InventoryValuationSummaryResponse, error) {
 	return reports.GetInventoryValuationSummaryReport(ctx, currentDate, warehouseID)
 }
 
@@ -3554,7 +3554,7 @@ func (r *warehouseResolver) Township(ctx context.Context, obj *models.Warehouse)
 }
 
 // ProductUnit is the resolver for the productUnit field.
-func (r *warehouseInventoryResponseResolver) ProductUnit(ctx context.Context, obj *reports.WarehouseInventoryResponse) (*models.AllProductUnit, error) {
+func (r *warehouseInventoryResponseResolver) ProductUnit(ctx context.Context, obj *models.WarehouseInventoryResponse) (*models.AllProductUnit, error) {
 	return middlewares.GetAllProductUnit(ctx, obj.ProductUnitId)
 }
 

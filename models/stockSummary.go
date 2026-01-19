@@ -281,7 +281,7 @@ func UpdateStockSummaryTransferQtyOut(tx *gorm.DB, businessId string, warehouseI
 	return nil
 }
 
-func GetAvailableStocks(ctx context.Context, warehouseId int) ([]*StockSummary, error) {
+func GetAvailableStocks(ctx context.Context, warehouseId int, asOf *MyDateString) ([]*StockSummary, error) {
 
 	businessId, ok := utils.GetBusinessIdFromContext(ctx)
 	if !ok || businessId == "" {
@@ -295,8 +295,11 @@ func GetAvailableStocks(ctx context.Context, warehouseId int) ([]*StockSummary, 
 	// Canonical: compute from ledger-of-record (stock_histories) to avoid stale caches.
 	// Important: we must respect stock_date to avoid future-dated transactions
 	// reducing "stock on hand" in operational screens like Transfer Orders.
-	today := MyDateString(time.Now().In(time.UTC))
-	rows, err := InventorySnapshotByProductWarehouse(ctx, today, &warehouseId, nil, nil, nil)
+	snapshotDate := MyDateString(time.Now().In(time.UTC))
+	if asOf != nil {
+		snapshotDate = *asOf
+	}
+	rows, err := InventorySnapshotByProductWarehouse(ctx, snapshotDate, &warehouseId, nil, nil, nil)
 	if err != nil {
 		return nil, err
 	}

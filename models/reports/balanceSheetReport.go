@@ -408,6 +408,7 @@ func GetBalanceSheetReport(ctx context.Context, toDate models.MyDateString, repo
                         SELECT id FROM accounts WHERE main_type IN ('INCOME', 'EXPENSE')
                     )
             ) AS retain_query
+            WHERE retain_amount <> 0
         ),
         CurrentYearEarnings AS (
             SELECT

@@ -3,6 +3,7 @@ module github.com/mmdatafocus/books_backend
 go 1.24.0
 
 require (
+	cloud.google.com/go/compute/metadata v0.3.0
 	cloud.google.com/go/pubsub v1.39.0
 	cloud.google.com/go/storage v1.43.0
 	github.com/99designs/gqlgen v0.17.41
@@ -21,6 +22,7 @@ require (
 	go.opentelemetry.io/otel v1.27.0
 	go.opentelemetry.io/otel/trace v1.27.0
 	golang.org/x/crypto v0.46.0
+	golang.org/x/oauth2 v0.21.0
 	google.golang.org/api v0.187.0
 	gorm.io/gorm v1.25.5
 )
@@ -29,7 +31,6 @@ require (
 	cloud.google.com/go v0.115.0 // indirect
 	cloud.google.com/go/auth v0.6.1 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.2 // indirect
-	cloud.google.com/go/compute/metadata v0.3.0 // indirect
 	cloud.google.com/go/iam v1.1.8 // indirect
 	github.com/bytedance/sonic v1.10.2 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
@@ -77,7 +78,6 @@ require (
 	golang.org/x/arch v0.6.0 // indirect
 	golang.org/x/image v0.15.0 // indirect
 	golang.org/x/net v0.48.0 // indirect
-	golang.org/x/oauth2 v0.21.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/time v0.5.0 // indirect
 	google.golang.org/genproto v0.0.0-20240624140628-dc46fd24d27d // indirect
