@@ -296,6 +296,13 @@ func GetAvailableStocks(ctx context.Context, warehouseId int, asOf *MyDateString
 	// Important: we must respect stock_date to avoid future-dated transactions
 	// reducing "stock on hand" in operational screens like Transfer Orders.
 	snapshotDate := MyDateString(time.Now().In(time.UTC))
+	if biz, err := GetBusiness(ctx); err == nil {
+		if biz.Timezone != "" {
+			if location, locErr := time.LoadLocation(biz.Timezone); locErr == nil {
+				snapshotDate = MyDateString(time.Now().In(location))
+			}
+		}
+	}
 	if asOf != nil {
 		snapshotDate = *asOf
 	}
@@ -330,6 +337,13 @@ func GetStockInHand(ctx context.Context, productId int, productType string) (dec
 
 	// Canonical: compute from the ledger-of-record (stock_histories) to avoid stale caches.
 	today := MyDateString(time.Now().In(time.UTC))
+	if biz, err := GetBusiness(ctx); err == nil {
+		if biz.Timezone != "" {
+			if location, locErr := time.LoadLocation(biz.Timezone); locErr == nil {
+				today = MyDateString(time.Now().In(location))
+			}
+		}
+	}
 	var pType *ProductType
 	switch productType {
 	case string(ProductTypeGroup):
