@@ -2200,8 +2200,8 @@ func (r *queryResolver) PaginateJournal(ctx context.Context, limit *int, after *
 }
 
 // GetAccountJournalTransactions is the resolver for the getAccountJournalTransactions field.
-func (r *queryResolver) GetAccountJournalTransactions(ctx context.Context, referenceID int, referenceType models.AccountReferenceType) ([]*models.AccountJournalTransaction, error) {
-	return models.GetAccountJournalTransactions(ctx, referenceID, referenceType)
+func (r *queryResolver) GetAccountJournalTransactions(ctx context.Context, referenceID int, referenceType models.AccountReferenceType, accountID *int) ([]*models.AccountJournalTransaction, error) {
+	return models.GetAccountJournalTransactions(ctx, referenceID, referenceType, accountID)
 }
 
 // Module is the resolver for the module field.

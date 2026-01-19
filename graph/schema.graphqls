@@ -3931,6 +3931,7 @@ type Query {
   getAccountJournalTransactions(
     referenceId: Int!
     referenceType: AccountReferenceType!
+    accountId: Int
   ): [AccountJournalTransaction] @goField(forceResolver: true) @auth
 
   getModule(id: ID!): Module! @goField(forceResolver: true) @auth

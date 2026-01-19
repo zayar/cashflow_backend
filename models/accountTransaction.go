@@ -163,7 +163,7 @@ type AccountJournalTransaction struct {
 // type AccountJournalTransaction struct {
 // }
 
-func GetAccountJournalTransactions(ctx context.Context, referenceId int, referenceType AccountReferenceType) ([]*AccountJournalTransaction, error) {
+func GetAccountJournalTransactions(ctx context.Context, referenceId int, referenceType AccountReferenceType, accountId *int) ([]*AccountJournalTransaction, error) {
 	businessId, ok := utils.GetBusinessIdFromContext(ctx)
 	if !ok || businessId == "" {
 		return nil, errors.New("business id is required")
@@ -196,7 +196,12 @@ func GetAccountJournalTransactions(ctx context.Context, referenceId int, referen
 	        AND aj.is_reversal = false
 	        AND aj.reversed_by_journal_id IS NULL
 	`
-	if err := db.WithContext(ctx).Raw(sql, businessId, referenceType, referenceId).Scan(&results).Error; err != nil {
+	args := []interface{}{businessId, referenceType, referenceId}
+	if accountId != nil && *accountId > 0 {
+		sql += " AND at.account_id = ?"
+		args = append(args, *accountId)
+	}
+	if err := db.WithContext(ctx).Raw(sql, args...).Scan(&results).Error; err != nil {
 		return nil, err
 	}
 	return results, nil
