@@ -873,6 +873,13 @@ func main() {
 	dispatcherCtx, cancelDispatcher := context.WithCancel(context.Background())
 	defer cancelDispatcher()
 	go workflow.NewOutboxDispatcher(db, logger).Run(dispatcherCtx)
+	if shouldRunDirectOutboxProcessor() {
+		go NewOutboxDirectProcessor(db, logger).Run(dispatcherCtx)
+		if logger != nil {
+			logger.WithFields(logrus.Fields{"field": "OutboxDirectProcessor"}).
+				Warn("OUTBOX_DIRECT_PROCESSING enabled; processing accounting outbox locally")
+		}
+	}
 
 	// Set the session isolation level to READ COMMITTED
 	for attempt := 1; ; attempt++ {

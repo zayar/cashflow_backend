@@ -385,7 +385,7 @@ func CreateInvoice(tx *gorm.DB, logger *logrus.Logger, recordId int, recordType 
 					stockHistories = append(stockHistories, existing)
 					continue
 				}
-				if findErr != nil && findErr != gorm.ErrRecordNotFound {
+				if !errors.Is(findErr, gorm.ErrRecordNotFound) {
 					tx.Rollback()
 					config.LogError(logger, "InvoiceWorkflow.go", "CreateInvoice", "FindExistingStockHistory", invoiceDetail, findErr)
 					return 0, nil, 0, nil, findErr

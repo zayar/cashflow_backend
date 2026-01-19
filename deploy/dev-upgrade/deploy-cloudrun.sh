@@ -95,6 +95,7 @@ DEPLOY_ARGS=(
   --set-env-vars "PUBSUB_PROJECT_ID=$PROJECT_ID"
   --set-env-vars "PUBSUB_TOPIC=$PUBSUB_TOPIC"
   --set-env-vars "PUBSUB_SUBSCRIPTION=$PUBSUB_SUBSCRIPTION"
+  --set-env-vars "OUTBOX_DIRECT_PROCESSING=true"
   --set-env-vars "STORAGE_PROVIDER=$STORAGE_PROVIDER"
   --set-env-vars "GCS_BUCKET=$GCS_BUCKET"
   --set-env-vars "GCS_URL=$GCS_URL"
