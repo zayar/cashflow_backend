@@ -3,6 +3,7 @@ package models
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/mmdatafocus/books_backend/config"
 	"github.com/mmdatafocus/books_backend/utils"
@@ -373,6 +374,95 @@ LEFT JOIN AllProducts ap ON Ledger.product_id = ap.product_id AND Ledger.product
 		return nil, err
 	}
 	return summaries, nil
+}
+
+// GetWarehouseInventoryByProduct returns per-warehouse inventory for a single product as-of the supplied date (default: today, business TZ).
+func GetWarehouseInventoryByProduct(ctx context.Context, productId int, toDate *MyDateString) ([]*WarehouseInventoryResponse, error) {
+	if productId <= 0 {
+		return nil, errors.New("product id is required")
+	}
+	businessId, ok := utils.GetBusinessIdFromContext(ctx)
+	if !ok || businessId == "" {
+		return nil, errors.New("business id is required")
+	}
+	business, err := GetBusiness(ctx)
+	if err != nil {
+		return nil, errors.New("business id is required")
+	}
+
+	asOf := MyDateString(time.Now().In(time.UTC))
+	if toDate != nil {
+		asOf = *toDate
+	}
+	if err := asOf.EndOfDayUTCTime(business.Timezone); err != nil {
+		return nil, err
+	}
+
+	db := config.GetDB()
+	sql := `
+WITH Ledger AS (
+    SELECT
+        sh.warehouse_id,
+        sh.product_id,
+        sh.product_type,
+        SUM(CASE WHEN sh.reference_type IN ('POS','PGOS','PCOS') THEN sh.qty ELSE 0 END) AS opening_qty,
+        SUM(CASE WHEN sh.reference_type IN ('BL','CN') AND sh.qty > 0 THEN sh.qty ELSE 0 END) AS received_qty,
+        SUM(CASE WHEN sh.reference_type = 'IV' THEN ABS(sh.qty) ELSE 0 END) AS sale_qty,
+        SUM(CASE WHEN sh.reference_type = 'TO' AND sh.is_transfer_in = true THEN sh.qty ELSE 0 END) AS transfer_qty_in,
+        SUM(CASE WHEN sh.reference_type = 'TO' AND sh.is_transfer_in = false THEN ABS(sh.qty) ELSE 0 END) AS transfer_qty_out,
+        SUM(CASE WHEN sh.reference_type = 'IVAQ' AND sh.qty > 0 THEN sh.qty ELSE 0 END) AS adjusted_qty_in,
+        SUM(CASE WHEN sh.reference_type = 'IVAQ' AND sh.qty < 0 THEN ABS(sh.qty) ELSE 0 END) AS adjusted_qty_out,
+        SUM(sh.qty) AS current_qty
+    FROM stock_histories sh
+    WHERE sh.business_id = @businessId
+      AND sh.stock_date <= @toDate
+      AND sh.is_reversal = 0
+      AND sh.reversed_by_stock_history_id IS NULL
+      AND sh.product_id = @productId
+    GROUP BY sh.warehouse_id, sh.product_id, sh.product_type
+),
+AllProducts AS (
+    SELECT id AS product_id, NAME AS product_name, unit_id AS product_unit_id, sku AS product_sku, 'S' AS product_type
+    FROM products
+    WHERE business_id = @businessId AND id = @productId
+    UNION
+    SELECT id AS product_id, NAME AS product_name, unit_id AS product_unit_id, sku AS product_sku, 'V' AS product_type
+    FROM product_variants
+    WHERE business_id = @businessId AND id = @productId
+)
+SELECT
+    Ledger.warehouse_id,
+    Ledger.product_id,
+    Ledger.product_type,
+    COALESCE(Ledger.opening_qty, 0) AS opening_qty,
+    0 AS order_qty,
+    COALESCE(Ledger.received_qty, 0) AS received_qty,
+    COALESCE(Ledger.transfer_qty_in, 0) AS transfer_qty_in,
+    COALESCE(Ledger.transfer_qty_out, 0) AS transfer_qty_out,
+    COALESCE(Ledger.adjusted_qty_in, 0) AS adjusted_qty_in,
+    COALESCE(Ledger.adjusted_qty_out, 0) AS adjusted_qty_out,
+    COALESCE(Ledger.sale_qty, 0) AS sale_qty,
+    0 AS committed_qty,
+    COALESCE(Ledger.current_qty, 0) AS current_qty,
+    COALESCE(Ledger.current_qty, 0) AS available_stock,
+    w.name AS warehouse_name,
+    ap.product_name,
+    ap.product_unit_id,
+    ap.product_sku
+FROM Ledger
+LEFT JOIN warehouses w ON Ledger.warehouse_id = w.ID
+LEFT JOIN AllProducts ap ON Ledger.product_id = ap.product_id AND Ledger.product_type = ap.product_type
+`
+
+	var rows []*WarehouseInventoryResponse
+	if err := db.WithContext(ctx).Raw(sql, map[string]interface{}{
+		"businessId": businessId,
+		"toDate":     asOf,
+		"productId":  productId,
+	}).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
 func GetInventoryValuationSummaryLedger(ctx context.Context, currentDate MyDateString, warehouseId int) ([]*InventoryValuationSummaryResponse, error) {

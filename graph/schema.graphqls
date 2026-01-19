@@ -4413,6 +4413,10 @@ type Query {
   getWarehouseInventoryReport(
     toDate: MyDateString!
   ): [WarehouseInventoryResponse] @goField(forceResolver: true) @auth
+  getWarehouseInventoryByProduct(
+    productId: Int!
+    toDate: MyDateString
+  ): [WarehouseInventoryResponse] @goField(forceResolver: true) @auth
   getSalesByProductReport(
     fromDate: MyDateString!
     toDate: MyDateString!

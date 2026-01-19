@@ -2758,6 +2758,11 @@ func (r *queryResolver) GetWarehouseInventoryReport(ctx context.Context, toDate 
 	return reports.GetWarehouseInventoryReport(ctx, toDate)
 }
 
+// GetWarehouseInventoryByProduct is the resolver for the getWarehouseInventoryByProduct field.
+func (r *queryResolver) GetWarehouseInventoryByProduct(ctx context.Context, productID int, toDate *models.MyDateString) ([]*models.WarehouseInventoryResponse, error) {
+	return models.GetWarehouseInventoryByProduct(ctx, productID, toDate)
+}
+
 // GetSalesByProductReport is the resolver for the getSalesByProductReport field.
 func (r *queryResolver) GetSalesByProductReport(ctx context.Context, fromDate models.MyDateString, toDate models.MyDateString, branchID *int, warehouseID *int, sku *string, productName *string) ([]*reports.SalesByProductResponse, error) {
 	return reports.GetSalesByProductReport(ctx, fromDate, toDate, branchID, warehouseID, sku, productName)
