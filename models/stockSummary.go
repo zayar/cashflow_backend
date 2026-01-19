@@ -293,40 +293,26 @@ func GetAvailableStocks(ctx context.Context, warehouseId int) ([]*StockSummary, 
 	}
 
 	// Canonical: compute from ledger-of-record (stock_histories) to avoid stale caches.
-	// Note: We intentionally aggregate across batches here (one row per product),
-	// because most UI callers want "available qty per product" for the warehouse.
-	db := config.GetDB()
-	type row struct {
-		ProductId   int             `gorm:"column:product_id"`
-		ProductType ProductType     `gorm:"column:product_type"`
-		CurrentQty  decimal.Decimal `gorm:"column:current_qty"`
-	}
-	var rows []row
-	if err := db.WithContext(ctx).Raw(`
-		SELECT
-			product_id,
-			product_type,
-			COALESCE(SUM(qty), 0) AS current_qty
-		FROM stock_histories
-		WHERE business_id = ?
-		  AND warehouse_id = ?
-		  AND is_reversal = 0
-		  AND reversed_by_stock_history_id IS NULL
-		GROUP BY product_id, product_type
-		HAVING COALESCE(SUM(qty), 0) <> 0
-	`, businessId, warehouseId).Scan(&rows).Error; err != nil {
+	// Important: we must respect stock_date to avoid future-dated transactions
+	// reducing "stock on hand" in operational screens like Transfer Orders.
+	today := MyDateString(time.Now().In(time.UTC))
+	rows, err := InventorySnapshotByProductWarehouse(ctx, today, &warehouseId, nil, nil, nil)
+	if err != nil {
 		return nil, err
 	}
 
 	out := make([]*StockSummary, 0, len(rows))
 	for _, r := range rows {
+		if r.StockOnHand.IsZero() {
+			continue
+		}
 		out = append(out, &StockSummary{
 			BusinessId:  businessId,
 			WarehouseId: warehouseId,
 			ProductId:   r.ProductId,
 			ProductType: r.ProductType,
 			BatchNumber: "",
-			CurrentQty:  r.CurrentQty,
+			CurrentQty:  r.StockOnHand,
 		})
 	}
 	return out, nil
