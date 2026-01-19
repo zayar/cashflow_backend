@@ -55,6 +55,16 @@ func LockTypeForReferenceType(referenceType string) (models.TransactionLockType,
 
 // EnforcePostingGate validates period locks for the message (worker-side).
 func EnforcePostingGate(ctx context.Context, msg config.PubSubMessage) error {
+	// Opening balances should be allowed on the migration date even if lock dates match.
+	// These are foundational records and must not be blocked by period locks.
+	switch msg.ReferenceType {
+	case string(models.AccountReferenceTypeOpeningBalance),
+		string(models.AccountReferenceTypeSupplierOpeningBalance),
+		string(models.AccountReferenceTypeCustomerOpeningBalance),
+		string(models.AccountReferenceTypeProductOpeningStock),
+		string(models.AccountReferenceTypeProductGroupOpeningStock):
+		return nil
+	}
 	lockType, ok := LockTypeForReferenceType(msg.ReferenceType)
 	if !ok {
 		return nil
