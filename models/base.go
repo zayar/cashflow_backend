@@ -258,7 +258,9 @@ func validateTransactionLock(ctx context.Context, transactionDate time.Time, bus
 	if err != nil {
 		return err
 	}
-	if !tDate.After(mDate) {
+	// Allow transactions on the migration date (same day).
+	// Only block dates strictly before the migration date.
+	if tDate.Before(mDate) {
 		return errors.New("transaction prior to the migration date has been locked")
 	}
 	return nil
