@@ -729,34 +729,55 @@ func calculateCogs(tx *gorm.DB, logger *logrus.Logger, productDetail ProductDeta
 		}
 
 		// Collect journal valuation deltas (append-only ledger via reversal+repost).
-		k := journalDeltaKey{businessId: uStock.BusinessId, refType: uStock.ReferenceType, refId: uStock.ReferenceId, transferIn: false}
+		//
+		// NOTE: Transfer Orders have TWO journals:
+		// - Source (transfer-out):   DR Goods In Transfer, CR Inventory (IsTransferIn=false)
+		// - Destination (transfer-in): DR Inventory, CR Goods In Transfer (IsTransferIn=true)
+		//
+		// When FIFO/valuation is recalculated later (due to backdated incoming/value adjustments),
+		// we must repost BOTH journals with matching deltas; otherwise "Goods In Transfer" will
+		// show a residual balance (e.g. 300) and the Balance Sheet will not reconcile.
 		if uStock.ReferenceType == models.StockReferenceTypeTransferOrder {
-			k.transferIn = false // transfer-out journal only
-		}
-
-		m, ok := journalDeltas[k]
-		if !ok {
-			m = make(map[int]valuationDelta)
-			journalDeltas[k] = m
-		}
-
-		if uStock.ReferenceType == models.StockReferenceTypeTransferOrder {
-			// Transfer out valuation: DR Goods In Transfer, CR Inventory (IsTransferIn=false).
 			systemAccounts, err := models.GetSystemAccounts(uStock.BusinessId)
 			if err != nil {
 				config.LogError(logger, "MainWorkflow.go", "CalculateCogs", "GetSystemAccounts", uStock.BusinessId, err)
 				return accountIds, err
 			}
 			git := systemAccounts[models.AccountCodeGoodsInTransfer]
-			m[git] = valuationDelta{
-				BaseDebit:  m[git].BaseDebit.Add(delta),
-				BaseCredit: m[git].BaseCredit,
-			}
 			inv := productDetail.InventoryAccountId
-			m[inv] = valuationDelta{
-				BaseDebit:  m[inv].BaseDebit,
-				BaseCredit: m[inv].BaseCredit.Add(delta),
+
+			// transfer-out deltas
+			kOut := journalDeltaKey{businessId: uStock.BusinessId, refType: uStock.ReferenceType, refId: uStock.ReferenceId, transferIn: false}
+			mOut, ok := journalDeltas[kOut]
+			if !ok {
+				mOut = make(map[int]valuationDelta)
+				journalDeltas[kOut] = mOut
 			}
+			mOut[git] = valuationDelta{
+				BaseDebit:  mOut[git].BaseDebit.Add(delta),
+				BaseCredit: mOut[git].BaseCredit,
+			}
+			mOut[inv] = valuationDelta{
+				BaseDebit:  mOut[inv].BaseDebit,
+				BaseCredit: mOut[inv].BaseCredit.Add(delta),
+			}
+
+			// transfer-in deltas (inverse)
+			kIn := journalDeltaKey{businessId: uStock.BusinessId, refType: uStock.ReferenceType, refId: uStock.ReferenceId, transferIn: true}
+			mIn, ok := journalDeltas[kIn]
+			if !ok {
+				mIn = make(map[int]valuationDelta)
+				journalDeltas[kIn] = mIn
+			}
+			mIn[inv] = valuationDelta{
+				BaseDebit:  mIn[inv].BaseDebit.Add(delta),
+				BaseCredit: mIn[inv].BaseCredit,
+			}
+			mIn[git] = valuationDelta{
+				BaseDebit:  mIn[git].BaseDebit,
+				BaseCredit: mIn[git].BaseCredit.Add(delta),
+			}
+
 			if !slices.Contains(accountIds, git) {
 				accountIds = append(accountIds, git)
 			}
@@ -764,6 +785,13 @@ func calculateCogs(tx *gorm.DB, logger *logrus.Logger, productDetail ProductDeta
 				accountIds = append(accountIds, inv)
 			}
 		} else {
+			k := journalDeltaKey{businessId: uStock.BusinessId, refType: uStock.ReferenceType, refId: uStock.ReferenceId, transferIn: false}
+
+			m, ok := journalDeltas[k]
+			if !ok {
+				m = make(map[int]valuationDelta)
+				journalDeltas[k] = m
+			}
 			// Outgoing valuation: DR purchase/COGS, CR inventory.
 			pAcc := productDetail.PurchaseAccountId
 			iAcc := productDetail.InventoryAccountId
@@ -801,7 +829,12 @@ func calculateCogs(tx *gorm.DB, logger *logrus.Logger, productDetail ProductDeta
 
 		var transferInFilter *bool
 		if k.refType == models.StockReferenceTypeTransferOrder {
-			transferInFilter = utils.NewFalse()
+			// Repost correct journal side: transfer-out (false) or transfer-in (true).
+			if k.transferIn {
+				transferInFilter = utils.NewTrue()
+			} else {
+				transferInFilter = utils.NewFalse()
+			}
 		}
 
 		if _, _, err := repostJournalWithValuationDeltas(
