@@ -205,6 +205,9 @@ func GetDefaultAllowedPaths() map[string]bool {
 		"listHistory":               true,
 		"getComment":                true,
 		"listComment":               true,
+		// Product details page uses this query; it still requires @auth (logged-in user),
+		// but should not be blocked by role-path mapping.
+		"getWarehouseInventoryByProduct": true,
 	}
 }
 
