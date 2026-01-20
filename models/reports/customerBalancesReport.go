@@ -278,6 +278,11 @@ WITH AccTransactionSummary AS
         account_journals AS aj
         JOIN account_transactions AS at ON aj.id = at.journal_id
     WHERE
+        -- tenant isolation + ignore reversal chains (count only active journals)
+        aj.business_id = @businessId
+        AND at.business_id = @businessId
+        AND aj.is_reversal = 0
+        AND aj.reversed_by_journal_id IS NULL
         at.account_id = @receivableAccId
         {{- if .toDate }} AND aj.transaction_date_time <= @transactionDate {{- end }}
         {{- if .branchId }} AND aj.branch_id = @branchId {{- end }}
@@ -330,6 +335,7 @@ ORDER BY customers.name, ATS.currency_id
 		return nil, err
 	}
 	if err := db.WithContext(ctx).Raw(sql, map[string]interface{}{
+		"businessId":      business.ID,
 		"baseCurrencyId":  business.BaseCurrencyId,
 		"transactionDate": transactionDate,
 		"branchId":        branchId,

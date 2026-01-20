@@ -142,6 +142,8 @@ func PaginateDetailedGeneralLedgerReport(ctx context.Context, limit *int, after 
             suppliers ON account_journals.supplier_id = suppliers.id
         WHERE 
             account_transactions.business_id = @businessId
+            AND account_journals.is_reversal = 0
+            AND account_journals.reversed_by_journal_id IS NULL
             AND account_transactions.transaction_date_time BETWEEN @fromDate AND @toDate
 			 {{- if not .AllBranch }}
                 AND account_transactions.branch_id = @branchId
@@ -504,6 +506,8 @@ func GetAllDetailedGeneralLedgerReport(ctx context.Context, fromDate models.MyDa
             suppliers ON account_journals.supplier_id = suppliers.id
         WHERE 
             account_transactions.business_id = ? 
+            AND account_journals.is_reversal = 0
+            AND account_journals.reversed_by_journal_id IS NULL
             AND account_transactions.transaction_date_time BETWEEN ? AND ?
         ORDER BY 
             accounts.name, account_transactions.transaction_date_time ASC
