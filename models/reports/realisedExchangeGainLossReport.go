@@ -34,6 +34,8 @@ func GetRealisedExchangeGainLossReport(ctx context.Context, branchId *int, fromD
 		at.business_id = @businessId
 		{{- if .branchId }} AND at.branch_id = @branchId {{- end }}
         AND at.transaction_date_time BETWEEN @fromDate AND @toDate
+		AND aj.is_reversal = 0
+		AND aj.reversed_by_journal_id IS NULL
 		AND at.account_id = @accountId;
 	`
 

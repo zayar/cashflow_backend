@@ -76,6 +76,9 @@ func GetExpenseByCategory(ctx context.Context, accountId int, fromDate models.My
 				aj.transaction_date_time >= ?
 				AND aj.transaction_date_time <= ?
 				AND aj.business_id = ?
+				AND at.business_id = ?
+				AND aj.is_reversal = 0
+				AND aj.reversed_by_journal_id IS NULL
 				AND at.account_id = ?
 				AND aj.reference_type IN (?, ?, ?)
 			GROUP BY
@@ -88,7 +91,7 @@ func GetExpenseByCategory(ctx context.Context, accountId int, fromDate models.My
 				transaction_date;
         `,
 		accountReferenceTypeExpense, accountReferenceTypeExpense,
-		fromDate, toDate, businessId, accountId,
+		fromDate, toDate, businessId, businessId, accountId,
 		accountReferenceTypeJournal, accountReferenceTypeExpense, accountReferenceTypeInvoiceWriteOff,
 	)
 

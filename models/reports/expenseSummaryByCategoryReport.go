@@ -69,6 +69,8 @@ func GetExpenseSummaryByCategory(ctx context.Context, fromDate models.MyDateStri
 			acc_tran.transaction_date_time >= ?
 			AND acc_tran.transaction_date_time <= ?
 			AND acc_tran.business_id = ?
+			AND aj.is_reversal = 0
+			AND aj.reversed_by_journal_id IS NULL
 			AND aj.reference_type IN (?, ?, ?)
 			AND acc_tran.account_id IN (
 				SELECT id FROM accounts WHERE main_type = ?
