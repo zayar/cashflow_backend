@@ -129,6 +129,14 @@ func ProcessInventoryAdjustmentQuantityWorkflow(tx *gorm.DB, logger *logrus.Logg
 		}
 		valuationAccountIds, err := ProcessStockHistories(tx, logger, merged)
 		if err != nil {
+			// Self-heal: FIFO inconsistency may require a rebuild; retry once.
+			if scope, ok := parseFifoInsufficientScope(err); ok {
+				if rerr := rebuildInventoryForScope(tx, logger, msg.BusinessId, scope, inventoryAdjustment.AdjustmentDate); rerr == nil {
+					valuationAccountIds, err = ProcessStockHistories(tx, logger, merged)
+				}
+			}
+		}
+		if err != nil {
 			config.LogError(logger, "InventoryAdjustmentQuantityWorkflow.go", "ProcessInventoryAdjustmentQuantityWorkflow > Create", "ProcessStockHistories", merged, err)
 			return err
 		}
@@ -157,6 +165,13 @@ func ProcessInventoryAdjustmentQuantityWorkflow(tx *gorm.DB, logger *logrus.Logg
 			return err
 		}
 		valuationAccountIds, err := ProcessStockHistories(tx, logger, merged)
+		if err != nil {
+			if scope, ok := parseFifoInsufficientScope(err); ok {
+				if rerr := rebuildInventoryForScope(tx, logger, msg.BusinessId, scope, oldInventoryAdjustment.AdjustmentDate); rerr == nil {
+					valuationAccountIds, err = ProcessStockHistories(tx, logger, merged)
+				}
+			}
+		}
 		if err != nil {
 			config.LogError(logger, "InventoryAdjustmentQuantityWorkflow.go", "ProcessInventoryAdjustmentQuantityWorkflow > Delete", "ProcessStockHistories", merged, err)
 			return err

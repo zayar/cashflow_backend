@@ -38,6 +38,15 @@ func ProcessCreditNoteWorkflow(tx *gorm.DB, logger *logrus.Logger, msg config.Pu
 		}
 		valuationAccountIds, err := ProcessIncomingStocks(tx, logger, stockHistories)
 		if err != nil {
+			// Self-heal: FIFO layer inconsistencies can prevent ledger posting and therefore
+			// the Balance Sheet / P&L from reflecting Credit Notes. Attempt a targeted rebuild and retry once.
+			if scope, ok := parseFifoInsufficientScope(err); ok {
+				if rerr := rebuildInventoryForScope(tx, logger, msg.BusinessId, scope, creditNote.CreditNoteDate); rerr == nil {
+					valuationAccountIds, err = ProcessIncomingStocks(tx, logger, stockHistories)
+				}
+			}
+		}
+		if err != nil {
 			config.LogError(logger, "CreditNoteWorkflow.go", "ProcessCreditNoteWorkflow > Create", "ProcessIncomingStocks", stockHistories, err)
 			return err
 		}
@@ -85,6 +94,13 @@ func ProcessCreditNoteWorkflow(tx *gorm.DB, logger *logrus.Logger, msg config.Pu
 		mergedStockHistories := mergeStockHistories(stockHistories, oldStockHistories)
 		valuationAccountIds, err := ProcessStockHistories(tx, logger, mergedStockHistories)
 		if err != nil {
+			if scope, ok := parseFifoInsufficientScope(err); ok {
+				if rerr := rebuildInventoryForScope(tx, logger, msg.BusinessId, scope, creditNote.CreditNoteDate); rerr == nil {
+					valuationAccountIds, err = ProcessStockHistories(tx, logger, mergedStockHistories)
+				}
+			}
+		}
+		if err != nil {
 			config.LogError(logger, "CreditNoteWorkflow.go", "ProcessCreditNoteWorkflow > Update", "ProcessIncomingStocks", mergedStockHistories, err)
 			return err
 		}
@@ -124,6 +140,13 @@ func ProcessCreditNoteWorkflow(tx *gorm.DB, logger *logrus.Logger, msg config.Pu
 			return err
 		}
 		valuationAccountIds, err := ProcessStockHistories(tx, logger, stockHistories)
+		if err != nil {
+			if scope, ok := parseFifoInsufficientScope(err); ok {
+				if rerr := rebuildInventoryForScope(tx, logger, msg.BusinessId, scope, oldCreditNote.CreditNoteDate); rerr == nil {
+					valuationAccountIds, err = ProcessStockHistories(tx, logger, stockHistories)
+				}
+			}
+		}
 		if err != nil {
 			config.LogError(logger, "CreditNoteWorkflow.go", "ProcessCreditNoteWorkflow > Delete", "ProcessIncomingStocks", stockHistories, err)
 			return err

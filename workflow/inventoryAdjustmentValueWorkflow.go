@@ -50,6 +50,20 @@ func ProcessInventoryAdjustmentValueWorkflow(tx *gorm.DB, logger *logrus.Logger,
 		}
 		valuationAccountIds, err := ProcessValueAdjustmentStocks(tx, logger, stockHistories)
 		if err != nil {
+			// Self-heal: if the value adjustment triggers FIFO insufficiency in dependent postings,
+			// rebuild the affected item+warehouse and retry once.
+			if scope, ok := parseFifoInsufficientScope(err); ok {
+				if rerr := rebuildInventoryForScope(tx, logger, msg.BusinessId, fifoScope{
+					warehouseId: scope.warehouseId,
+					productId:   scope.productId,
+					productType: scope.productType,
+					batch:       scope.batch,
+				}, inventoryAdjustment.AdjustmentDate); rerr == nil {
+					valuationAccountIds, err = ProcessValueAdjustmentStocks(tx, logger, stockHistories)
+				}
+			}
+		}
+		if err != nil {
 			config.LogError(logger, "InventoryAdjustmentValueWorkflow.go", "ProcessInventoryAdjustmentValueWorkflow > Create", "ProcessValueAdjustmentStocks", stockHistories, err)
 			return err
 		}

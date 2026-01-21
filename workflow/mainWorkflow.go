@@ -1406,7 +1406,7 @@ func ensureNonNegativeForKeys(tx *gorm.DB, logger *logrus.Logger, stockHistories
 
 		var minQty decimal.Decimal
 		err := tx.Raw(`
-			SELECT MIN(running_qty) AS min_qty
+			SELECT COALESCE(MIN(running_qty), 0) AS min_qty
 			FROM (
 				SELECT
 					SUM(qty) OVER (
