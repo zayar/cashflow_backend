@@ -9,3 +9,13 @@ const (
 	OutboxPublishStatusFailed     = "FAILED"
 	OutboxPublishStatusDead       = "DEAD"
 )
+
+// Outbox processing statuses for PubSubMessageRecord.ProcessingStatus.
+// These represent worker-side handling state (distinct from PublishStatus).
+const (
+	OutboxProcessStatusPending    = "PENDING"
+	OutboxProcessStatusProcessing = "PROCESSING"
+	OutboxProcessStatusSucceeded  = "SUCCEEDED"
+	OutboxProcessStatusFailed     = "FAILED"
+	OutboxProcessStatusDead       = "DEAD"
+)

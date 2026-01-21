@@ -790,6 +790,11 @@ func (r *mutationResolver) ChangePassword(ctx context.Context, oldPassword strin
 	return models.ChangePassword(ctx, oldPassword, newPassword)
 }
 
+// ReprocessOutbox is the resolver for the reprocessOutbox field.
+func (r *mutationResolver) ReprocessOutbox(ctx context.Context, referenceType models.AccountReferenceType, referenceID int) (*models.OutboxStatus, error) {
+	return models.ReprocessOutbox(ctx, referenceType, referenceID)
+}
+
 // CreateUserAccount is the resolver for the createUserAccount field.
 func (r *mutationResolver) CreateUserAccount(ctx context.Context, input models.NewUserAccount) (*models.UserAccount, error) {
 	return models.CreateUserAccount(ctx, input)
@@ -2202,6 +2207,11 @@ func (r *queryResolver) PaginateJournal(ctx context.Context, limit *int, after *
 // GetAccountJournalTransactions is the resolver for the getAccountJournalTransactions field.
 func (r *queryResolver) GetAccountJournalTransactions(ctx context.Context, referenceID int, referenceType models.AccountReferenceType, accountID *int) ([]*models.AccountJournalTransaction, error) {
 	return models.GetAccountJournalTransactions(ctx, referenceID, referenceType, accountID)
+}
+
+// GetOutboxStatus is the resolver for the getOutboxStatus field.
+func (r *queryResolver) GetOutboxStatus(ctx context.Context, referenceType models.AccountReferenceType, referenceID int) (*models.OutboxStatus, error) {
+	return models.GetOutboxStatus(ctx, referenceType, referenceID)
 }
 
 // Module is the resolver for the module field.

@@ -198,6 +198,7 @@ func accountingPubSubHandler() gin.HandlerFunc {
 		ctx = context.WithValue(ctx, utils.ContextKeyUserId, 0)
 		ctx = context.WithValue(ctx, utils.ContextKeyUserName, "System")
 		ctx = utils.SetCorrelationIdInContext(ctx, correlationID)
+		markOutboxProcessing(ctx, m.ID)
 		if err := ProcessMessage(ctx, logger, m); err != nil {
 			logger.WithFields(logrus.Fields{
 				"field":          "accountingPubSubHandler",
@@ -207,12 +208,19 @@ func accountingPubSubHandler() gin.HandlerFunc {
 				"message_id":     msg.Message.ID,
 				"correlation_id": correlationID,
 			}).Error("pubsub processing failed: " + err.Error())
-			// Non-2xx tells Pub/Sub to retry (and potentially route to DLQ).
+			// Record error + backoff (DB-side). Let Pub/Sub retry until we mark DEAD.
+			if dead := markOutboxProcessFailure(ctx, logger, m, err); dead {
+				// Ack/drop to stop infinite Pub/Sub retries once we've DLQ'd the record.
+				c.Status(http.StatusNoContent)
+				return
+			}
+			// Non-2xx tells Pub/Sub to retry.
 			c.Status(http.StatusInternalServerError)
 			return
 		}
 
 		// Success: ack.
+		markOutboxProcessSuccess(ctx, logger, m)
 		c.Status(http.StatusNoContent)
 	}
 }

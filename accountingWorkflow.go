@@ -67,6 +67,7 @@ func RunAccountingWorkflow() error {
 		ctx = context.WithValue(ctx, utils.ContextKeyBusinessId, m.BusinessId)
 		ctx = context.WithValue(ctx, utils.ContextKeyUserId, 0)
 		ctx = context.WithValue(ctx, utils.ContextKeyUserName, "System")
+		markOutboxProcessing(ctx, m.ID)
 		if err := ProcessMessage(ctx, logger, m); err != nil {
 			logger.WithFields(logrus.Fields{
 				"field":          "AccountingWorkflow",
@@ -75,9 +76,15 @@ func RunAccountingWorkflow() error {
 				"reference_id":   m.ReferenceId,
 				"message_id":     msg.ID,
 			}).Error("pubsub processing failed: " + err.Error())
-			msg.Nack()
+			if dead := markOutboxProcessFailure(ctx, logger, m, err); dead {
+				// Stop infinite redelivery loops for records we've DLQ'd.
+				msg.Ack()
+			} else {
+				msg.Nack()
+			}
 			return
 		}
+		markOutboxProcessSuccess(ctx, logger, m)
 		msg.Ack()
 	}
 
@@ -210,6 +217,7 @@ func ProcessMessage(ctx context.Context, logger *logrus.Logger, m config.PubSubM
 						"is_processed":       true,
 						"last_process_error": &msg,
 						"processed_at":       &now,
+						"processing_status":  models.OutboxProcessStatusDead,
 					}).Error
 
 				if logger != nil {

@@ -86,6 +86,8 @@ func (p *OutboxDirectProcessor) processOnce(ctx context.Context) {
 	err := p.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		q := tx.
 			Where("is_processed = 0").
+			Where("processing_status <> ?", models.OutboxProcessStatusDead).
+			Where("(next_process_attempt_at IS NULL OR next_process_attempt_at <= ?)", now).
 			Where("(locked_at IS NULL OR locked_at <= ?)", staleBefore).
 			Order("id ASC").
 			Limit(p.BatchSize).
@@ -104,6 +106,7 @@ func (p *OutboxDirectProcessor) processOnce(ctx context.Context) {
 				Updates(map[string]interface{}{
 					"locked_at": claimed[i].LockedAt,
 					"locked_by": claimed[i].LockedBy,
+					"processing_status": models.OutboxProcessStatusProcessing,
 				}).Error; err != nil {
 				return err
 			}
@@ -122,31 +125,10 @@ func (p *OutboxDirectProcessor) processOnce(ctx context.Context) {
 		procCtx = utils.SetCorrelationIdInContext(procCtx, rec.CorrelationId)
 
 		if err := ProcessMessage(procCtx, p.Logger, msg); err != nil {
-			errMsg := err.Error()
-			_ = p.DB.WithContext(ctx).Model(&models.PubSubMessageRecord{}).
-				Where("id = ?", rec.ID).
-				Updates(map[string]interface{}{
-					"last_process_error": &errMsg,
-					"locked_at":          nil,
-					"locked_by":          nil,
-				}).Error
-			if p.Logger != nil {
-				p.Logger.WithFields(logrus.Fields{
-					"field":          "OutboxDirectProcessor",
-					"business_id":    rec.BusinessId,
-					"reference_type": rec.ReferenceType,
-					"reference_id":   rec.ReferenceId,
-					"record_id":      rec.ID,
-				}).Error("direct processing failed: " + errMsg)
-			}
+			_ = markOutboxProcessFailure(procCtx, p.Logger, msg, err)
 			continue
 		}
 
-		_ = p.DB.WithContext(ctx).Model(&models.PubSubMessageRecord{}).
-			Where("id = ?", rec.ID).
-			Updates(map[string]interface{}{
-				"locked_at": nil,
-				"locked_by": nil,
-			}).Error
+		markOutboxProcessSuccess(procCtx, p.Logger, msg)
 	}
 }

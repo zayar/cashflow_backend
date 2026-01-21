@@ -37,6 +37,9 @@ type PubSubMessageRecord struct {
 	LockedBy         *string    `gorm:"size:100" json:"locked_by"`
 	LastPublishError *string    `gorm:"type:text" json:"last_publish_error"`
 	// Processing metadata (consumer/worker)
+	ProcessingStatus   string     `gorm:"size:20;index;not null;default:'PENDING'" json:"processing_status"` // PENDING|PROCESSING|SUCCEEDED|FAILED|DEAD
+	ProcessAttempts    int        `gorm:"not null;default:0" json:"process_attempts"`
+	NextProcessAttemptAt *time.Time `gorm:"index" json:"next_process_attempt_at"`
 	LastProcessError *string    `gorm:"type:text" json:"last_process_error"`
 	ProcessedAt      *time.Time `gorm:"index" json:"processed_at"`
 	CorrelationId    string     `gorm:"size:64;index" json:"correlation_id"`

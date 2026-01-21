@@ -208,6 +208,8 @@ func GetDefaultAllowedPaths() map[string]bool {
 		// Product details page uses this query; it still requires @auth (logged-in user),
 		// but should not be blocked by role-path mapping.
 		"getWarehouseInventoryByProduct": true,
+		// Outbox status is purely diagnostic UI data (still requires @auth).
+		"getOutboxStatus": true,
 	}
 }
 
@@ -246,6 +248,7 @@ func GetAdminPaths() map[string]bool {
 		"paginateHistory":      true,
 		"clearRedis":           true,
 		"reconcileAccounting":  true,
+		"reprocessOutbox":      true,
 		"register":             true,
 	}
 

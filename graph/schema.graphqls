@@ -3803,6 +3803,32 @@ input NewPosCheckout {
   depositAccountId: Int
 }
 
+enum OutboxPostingStatus {
+  PENDING
+  PROCESSING
+  FAILED
+  DEAD
+  SUCCEEDED
+}
+
+type OutboxStatus {
+  recordId: Int!
+  referenceType: AccountReferenceType!
+  referenceId: Int!
+  publishStatus: String!
+  processingStatus: OutboxPostingStatus!
+  isProcessed: Boolean!
+  publishAttempts: Int!
+  processAttempts: Int!
+  nextAttemptAt: Time
+  nextProcessAttemptAt: Time
+  lastPublishError: String
+  lastProcessError: String
+  createdAt: Time!
+  publishedAt: Time
+  processedAt: Time
+}
+
 type Query {
   getDocument(id: ID!): Document! @goField(forceResolver: true) @auth
 
@@ -3933,6 +3959,11 @@ type Query {
     referenceType: AccountReferenceType!
     accountId: Int
   ): [AccountJournalTransaction] @goField(forceResolver: true) @auth
+
+  getOutboxStatus(
+    referenceType: AccountReferenceType!
+    referenceId: Int!
+  ): OutboxStatus! @goField(forceResolver: true) @auth
 
   getModule(id: ID!): Module! @goField(forceResolver: true) @auth
   listModule(name: String): [BaseModule] @goField(forceResolver: true) @auth
@@ -4677,6 +4708,11 @@ type Mutation {
   changePassword(oldPassword: String!, newPassword: String!): User!
     @goField(forceResolver: true)
     @auth
+
+  reprocessOutbox(
+    referenceType: AccountReferenceType!
+    referenceId: Int!
+  ): OutboxStatus! @goField(forceResolver: true) @auth
 
   createUserAccount(input: NewUserAccount!): UserAccount!
     @goField(forceResolver: true)
