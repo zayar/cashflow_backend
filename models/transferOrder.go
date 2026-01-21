@@ -116,6 +116,15 @@ func (input NewTransferOrder) validate(ctx context.Context, businessId string, _
 	//   - no account journals
 	//   - inventory reports missing the transfer
 	if input.CurrentStatus == TransferOrderStatusConfirmed {
+		// Prevent "silent confirms" that later produce no journal/stock movement because the worker
+		// drops the message due to posting gate / period locks.
+		//
+		// The worker enforces this via workflow.EnforcePostingGate(), but if we don't validate here,
+		// the UI can show "Confirmed" even though nothing posts.
+		if err := ValidateTransactionLock(ctx, input.TransferDate, businessId, AccountantTransactionLock); err != nil {
+			return err
+		}
+
 		asOf := MyDateString(input.TransferDate)
 		for _, d := range input.Details {
 			if d.ProductId <= 0 {

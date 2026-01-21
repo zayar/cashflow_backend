@@ -54,7 +54,8 @@ func repostJournalWithValuationDeltas(
 		var candidates []*models.AccountJournal
 		if err := tx.
 			Preload("AccountTransactions").
-			Where("reference_id = ? AND reference_type = ? AND is_reversal = 0 AND reversed_by_journal_id IS NULL", refId, refType).
+			// CRITICAL: always scope by business_id. reference_id is not globally unique.
+			Where("business_id = ? AND reference_id = ? AND reference_type = ? AND is_reversal = 0 AND reversed_by_journal_id IS NULL", businessId, refId, refType).
 			Find(&candidates).Error; err != nil {
 			return 0, nil, err
 		}
@@ -222,4 +223,3 @@ func repostJournalWithValuationDeltas(
 
 	return replacement.ID, accountIds, nil
 }
-
