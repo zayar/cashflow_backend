@@ -210,6 +210,8 @@ func GetDefaultAllowedPaths() map[string]bool {
 		"getWarehouseInventoryByProduct": true,
 		// Outbox status is purely diagnostic UI data (still requires @auth).
 		"getOutboxStatus": true,
+		// Allow all logged-in users to request a reprocess (still requires @auth).
+		"reprocessOutbox": true,
 	}
 }
 
