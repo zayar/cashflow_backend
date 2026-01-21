@@ -3,6 +3,7 @@ package models
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -103,6 +104,42 @@ func (input NewTransferOrder) validate(ctx context.Context, businessId string, _
 	for _, inputDetail := range input.Details {
 		if err := ValidateValueAdjustment(ctx, businessId, input.TransferDate, inputDetail.ProductType, inputDetail.ProductId, &inputDetail.BatchNumber); err != nil {
 			return err
+		}
+	}
+
+	// If this transfer is being confirmed, ensure the source warehouse has enough stock on hand
+	// in the ledger-of-record (stock_histories) as-of transfer date.
+	//
+	// Without this guard, we can end up with:
+	// - stock_summaries updated (UI "product transactions" show movement), but
+	// - transfer order workflow failing later (no FIFO layers / no ledger), resulting in:
+	//   - no account journals
+	//   - inventory reports missing the transfer
+	if input.CurrentStatus == TransferOrderStatusConfirmed {
+		asOf := MyDateString(input.TransferDate)
+		for _, d := range input.Details {
+			if d.ProductId <= 0 {
+				continue
+			}
+			pid := d.ProductId
+			pt := d.ProductType
+			batch := d.BatchNumber
+			rows, err := InventorySnapshotByProductWarehouse(ctx, asOf, &input.SourceWarehouseId, &pid, &pt, &batch)
+			if err != nil {
+				return err
+			}
+			onHand := decimal.Zero
+			for _, r := range rows {
+				onHand = onHand.Add(r.StockOnHand)
+			}
+			if onHand.LessThan(d.TransferQty) {
+				// Best-effort product name for a clearer error.
+				name := strings.TrimSpace(d.Name)
+				if name == "" {
+					name = fmt.Sprintf("product_id=%d", d.ProductId)
+				}
+				return fmt.Errorf("insufficient stock on hand for %s in source warehouse (on_hand=%s, transfer_qty=%s)", name, onHand.String(), d.TransferQty.String())
+			}
 		}
 	}
 

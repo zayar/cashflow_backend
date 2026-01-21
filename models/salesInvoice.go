@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mmdatafocus/books_backend/config"
@@ -341,6 +342,12 @@ func CreateSalesInvoice(ctx context.Context, input *NewSalesInvoice) (*SalesInvo
 		totalDetailTaxAmount decimal.Decimal
 
 	var productIds, variantIds, taxIds, taxGroupIds, accountIds []int
+	// Guardrail: validate stock against ledger-of-record (stock_histories) so we don't allow creating
+	// an invoice from "summary stock" that isn't actually present in FIFO layers.
+	//
+	// This prevents: invoice created successfully but posting fails later (no invoice journal),
+	// typically when transfer orders updated stock_summaries but their accounting workflow failed.
+	reservedByKey := make(map[string]decimal.Decimal)
 	for _, item := range input.Details {
 		invoiceItem := SalesInvoiceDetail{
 			ProductId:          item.ProductId,
@@ -358,9 +365,43 @@ func CreateSalesInvoice(ctx context.Context, input *NewSalesInvoice) (*SalesInvo
 			SalesOrderItemId:   item.SalesOrderItemId,
 		}
 
-		if err := ValidateProductStock(tx, ctx, businessId, input.WarehouseId, item.BatchNumber, item.ProductType, item.ProductId, item.DetailQty); err != nil {
-			tx.Rollback()
-			return nil, err
+		// Keep legacy behavior: if this line is for a non-inventory item, skip stock checks.
+		// For inventory-tracked items, validate using ledger snapshots as-of invoice date.
+		if item.ProductId > 0 && (item.ProductType == ProductTypeSingle || item.ProductType == ProductTypeVariant) {
+			product, err := GetProductOrVariant(ctx, string(item.ProductType), item.ProductId)
+			if err != nil {
+				tx.Rollback()
+				return nil, err
+			}
+			if product.GetInventoryAccountID() > 0 {
+				key := fmt.Sprintf("%d-%s-%s", item.ProductId, string(item.ProductType), item.BatchNumber)
+				already := reservedByKey[key]
+				asOf := MyDateString(input.InvoiceDate)
+				pid := item.ProductId
+				pt := item.ProductType
+				batch := item.BatchNumber
+				rows, err := InventorySnapshotByProductWarehouse(ctx, asOf, &input.WarehouseId, &pid, &pt, &batch)
+				if err != nil {
+					tx.Rollback()
+					return nil, err
+				}
+				onHand := decimal.Zero
+				for _, r := range rows {
+					onHand = onHand.Add(r.StockOnHand)
+				}
+				available := onHand.Sub(already)
+				if available.LessThan(item.DetailQty) {
+					tx.Rollback()
+					return nil, fmt.Errorf("insufficient stock on hand for %s (available=%s, invoice_qty=%s)", strings.TrimSpace(item.Name), available.String(), item.DetailQty.String())
+				}
+				reservedByKey[key] = already.Add(item.DetailQty)
+			}
+		} else {
+			// Fallback for other product types / legacy behavior.
+			if err := ValidateProductStock(tx, ctx, businessId, input.WarehouseId, item.BatchNumber, item.ProductType, item.ProductId, item.DetailQty); err != nil {
+				tx.Rollback()
+				return nil, err
+			}
 		}
 		// Calculate tax and total amounts for the item
 		invoiceItem.CalculateSaleItemDiscountAndTax(ctx, *input.IsTaxInclusive)
