@@ -44,8 +44,16 @@ func shouldRunDirectOutboxProcessor() bool {
 	if val == "false" {
 		return false
 	}
-	// Default: if Pub/Sub is not configured, process directly.
-	return strings.TrimSpace(os.Getenv("PUBSUB_TOPIC")) == "" || strings.TrimSpace(os.Getenv("PUBSUB_SUBSCRIPTION")) == ""
+	// Default: run as a safety-net even when Pub/Sub is configured.
+	//
+	// Why:
+	// - In some environments Pub/Sub settings may exist but delivery/permissions can be misconfigured,
+	//   leaving outbox rows stuck in PENDING/FAILED/SENT without journals ever being created.
+	// - Running the direct processor as a background "backup worker" ensures journals are eventually created.
+	// - Processing is protected by DB idempotency keys + ledger immutability, so at-least-once delivery is safe.
+	//
+	// To disable in production, explicitly set OUTBOX_DIRECT_PROCESSING=false.
+	return true
 }
 
 func (p *OutboxDirectProcessor) Run(ctx context.Context) {
