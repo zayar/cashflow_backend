@@ -219,7 +219,11 @@ WITH AccTransactionSummary AS
 (
     SELECT
         aj.customer_id AS customer_id,
-        at.foreign_currency_id AS currency_id,
+        CASE
+            WHEN at.foreign_currency_id != 0
+            AND at.foreign_currency_id != @baseCurrencyId THEN at.foreign_currency_id
+            ELSE @baseCurrencyId
+        END AS currency_id,
         SUM(
             CASE
                 WHEN reference_type = 'IV' OR reference_type = 'COB' THEN base_debit
@@ -234,25 +238,6 @@ WITH AccTransactionSummary AS
                 ELSE 0
             END
         ) AS total_invoice_fcy,
-        SUM(
-            CASE
-                WHEN reference_type = 'CN' THEN base_credit
-                WHEN reference_type = 'CNR' THEN base_debit * -1
-                ELSE 0
-            END
-        ) AS total_credit_bcy,
-        SUM(
-            CASE
-                WHEN foreign_currency_id != 0
-                AND foreign_currency_id != @baseCurrencyId THEN
-                    CASE
-                        WHEN reference_type = 'CN' THEN foreign_credit
-                        WHEN reference_type = 'CNR' THEN foreign_debit * -1
-                        ELSE 0
-                    END
-                ELSE 0
-            END
-        ) AS total_credit_fcy,
         SUM(
             CASE
                 WHEN reference_type = 'CP'
@@ -288,7 +273,24 @@ WITH AccTransactionSummary AS
         {{- if .branchId }} AND aj.branch_id = @branchId {{- end }}
     GROUP BY
         aj.customer_id,
-        at.foreign_currency_id
+        currency_id
+),
+AvailableCredit AS (
+    SELECT
+        (case when currency_id = @baseCurrencyId then 0 else SUM(cn.remaining_balance) end) amount,
+        SUM(cn.remaining_balance * (case when currency_id = @baseCurrencyId then 1 else exchange_rate end)) adjusted_amount,
+        cn.customer_id,
+        cn.currency_id
+    from
+        credit_notes cn
+    where
+        cn.business_id = @businessId
+        {{- if .branchId }} AND cn.branch_id = @branchId {{- end }}
+        AND NOT cn.current_status IN ('Draft')
+        {{- if .toDate }} AND cn.credit_note_date <= @transactionDate {{- end }}
+    group by
+        cn.customer_id,
+        cn.currency_id
 )
 SELECT
     ATS.customer_id,
@@ -297,18 +299,41 @@ SELECT
     currencies.decimal_places,
     ATS.total_invoice_bcy invoice_balance,
     ATS.total_invoice_fcy invoice_balance_fcy,
-    ATS.total_credit_bcy customer_credit,
-    ATS.total_credit_fcy customer_credit_fcy,
+    COALESCE(AC.adjusted_amount, 0) customer_credit,
+    COALESCE(AC.amount, 0) customer_credit_fcy,
     ATS.total_received_bcy received_amount,
     ATS.total_received_fcy received_amount_fcy,
-    (ATS.total_invoice_bcy - ATS.total_credit_bcy - ATS.total_received_bcy) closing_balance,
-    (ATS.total_invoice_fcy - ATS.total_credit_fcy - ATS.total_received_fcy) closing_balance_fcy
+    (ATS.total_invoice_bcy - COALESCE(AC.adjusted_amount, 0) - ATS.total_received_bcy) closing_balance,
+    (ATS.total_invoice_fcy - COALESCE(AC.amount, 0) - ATS.total_received_fcy) closing_balance_fcy
 
 
     FROM AccTransactionSummary ATS
+    LEFT JOIN AvailableCredit AC ON AC.customer_id = ATS.customer_id AND AC.currency_id = ATS.currency_id
     LEFT JOIN customers ON customers.id = ATS.customer_id
     LEFT JOIN currencies ON currencies.id = ATS.currency_id
-ORDER BY customers.name, ATS.currency_id
+
+UNION ALL
+
+SELECT
+    AC.customer_id,
+    customers.name customer_name,
+    currencies.symbol currency_symbol,
+    currencies.decimal_places,
+    COALESCE(ATS.total_invoice_bcy, 0) invoice_balance,
+    COALESCE(ATS.total_invoice_fcy, 0) invoice_balance_fcy,
+    COALESCE(AC.adjusted_amount, 0) customer_credit,
+    COALESCE(AC.amount, 0) customer_credit_fcy,
+    COALESCE(ATS.total_received_bcy, 0) received_amount,
+    COALESCE(ATS.total_received_fcy, 0) received_amount_fcy,
+    (COALESCE(ATS.total_invoice_bcy, 0) - COALESCE(AC.adjusted_amount, 0) - COALESCE(ATS.total_received_bcy, 0)) closing_balance,
+    (COALESCE(ATS.total_invoice_fcy, 0) - COALESCE(AC.amount, 0) - COALESCE(ATS.total_received_fcy, 0)) closing_balance_fcy
+FROM
+    AvailableCredit AC
+    LEFT JOIN AccTransactionSummary ATS ON ATS.customer_id = AC.customer_id AND ATS.currency_id = AC.currency_id
+    LEFT JOIN customers ON customers.id = AC.customer_id
+    LEFT JOIN currencies ON currencies.id = AC.currency_id
+WHERE ATS.customer_id IS NULL
+ORDER BY customer_name, currency_symbol
 `
 	business, err := models.GetBusiness(ctx)
 	if err != nil {
