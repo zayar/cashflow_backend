@@ -3,7 +3,6 @@ package workflow
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"slices"
 	"strconv"
 	"time"
@@ -195,6 +194,47 @@ func CreateTransferOrder(tx *gorm.DB, logger *logrus.Logger, recordId int, recor
 		return 0, nil, 0, err
 	}
 
+	// IMPORTANT:
+	// Transfer Orders have TWO journals (source transfer-out + destination transfer-in).
+	// Outgoing stock valuation (ProcessOutgoingStocks -> CalculateCogs) may trigger a journal repost
+	// (reverse+replace) for BOTH sides to keep "Goods In Transfer" balanced.
+	//
+	// If the destination journal doesn't exist yet, reposting the transfer-in side will fail with:
+	//   "repost journal: matching active journal not found"
+	//
+	// To avoid that, create a placeholder destination journal now (with IsTransferIn=true lines).
+	// The valuation repost will update both journals once the true COGS is known.
+	for _, srcTx := range sourceAccTransactions {
+		dt := srcTx
+		dt.ID = 0
+		dt.BranchId = destinationBranchId
+		dt.IsTransferIn = utils.NewTrue()
+		// Mirror debit/credit direction (even if 0 at this stage).
+		if dt.AccountId == systemAccounts[models.AccountCodeGoodsInTransfer] {
+			dt.BaseCredit = dt.BaseDebit
+			dt.BaseDebit = decimal.NewFromInt(0)
+		} else {
+			dt.BaseDebit = dt.BaseCredit
+			dt.BaseCredit = decimal.NewFromInt(0)
+		}
+		destinationAccTransactions = append(destinationAccTransactions, dt)
+	}
+
+	destinationAccJournal := models.AccountJournal{
+		BusinessId:          businessId,
+		BranchId:            destinationBranchId,
+		TransactionDateTime: transactionTime,
+		TransactionNumber:   strconv.Itoa(transferOrder.ID),
+		ReferenceId:         transferOrder.ID,
+		ReferenceType:       models.AccountReferenceTypeTransferOrder,
+		AccountTransactions: destinationAccTransactions,
+	}
+	if err := tx.Create(&destinationAccJournal).Error; err != nil {
+		tx.Rollback()
+		config.LogError(logger, "TransferOrderWorkflow.go", "CreateTransferOrder", "CreateDestinationAccountJournal", destinationAccJournal, err)
+		return 0, nil, 0, err
+	}
+
 	valuationAccountIds, err := ProcessOutgoingStocks(tx, logger, transferOutStockHistories)
 	if err != nil {
 		config.LogError(logger, "TransferOrderWorkflow.go", "CreateTransferOrder", "ProcessOutgoingStocks", transferOutStockHistories, err)
@@ -265,71 +305,6 @@ func CreateTransferOrder(tx *gorm.DB, logger *logrus.Logger, recordId int, recor
 			return 0, nil, 0, err
 		}
 		transferInStockHistories = append(transferInStockHistories, &in)
-	}
-
-	// NOTE: COGS/valuation can trigger a journal repost (reverse+replace).
-	// Always fetch the current active SOURCE journal (IsTransferIn=false) by reference.
-	var activeJournals []*models.AccountJournal
-	err = tx.Preload("AccountTransactions").
-		Where("business_id = ? AND reference_id = ? AND reference_type = ? AND is_reversal = 0 AND reversed_by_journal_id IS NULL",
-			businessId, transferOrder.ID, models.AccountReferenceTypeTransferOrder).
-		Find(&activeJournals).Error
-	if err != nil {
-		config.LogError(logger, "TransferOrderWorkflow.go", "CreateTransferOrder", "GetActiveSourceAccountJournalCandidates", transferOrder.ID, err)
-		return 0, nil, 0, err
-	}
-
-	var sourceJournal *models.AccountJournal
-	for _, j := range activeJournals {
-		if j.BranchId != sourceBranchId {
-			continue
-		}
-		for _, t := range j.AccountTransactions {
-			if t.IsTransferIn != nil && *t.IsTransferIn {
-				continue
-			}
-			sourceJournal = j
-			break
-		}
-		if sourceJournal != nil {
-			break
-		}
-	}
-	if sourceJournal == nil {
-		config.LogError(logger, "TransferOrderWorkflow.go", "CreateTransferOrder", "ActiveSourceAccountJournalNotFound", transferOrder.ID, nil)
-		return 0, nil, 0, fmt.Errorf("active source account journal not found for transfer order %d", transferOrder.ID)
-	}
-
-	for _, updatedAccTransact := range sourceJournal.AccountTransactions {
-		updatedAccTransact.ID = 0
-		updatedAccTransact.BranchId = destinationBranchId
-		updatedAccTransact.IsTransferIn = utils.NewTrue()
-
-		if updatedAccTransact.AccountId == systemAccounts[models.AccountCodeGoodsInTransfer] {
-			updatedAccTransact.BaseCredit = updatedAccTransact.BaseDebit
-			updatedAccTransact.BaseDebit = decimal.NewFromInt(0)
-		} else {
-			updatedAccTransact.BaseDebit = updatedAccTransact.BaseCredit
-			updatedAccTransact.BaseCredit = decimal.NewFromInt(0)
-		}
-		destinationAccTransactions = append(destinationAccTransactions, updatedAccTransact)
-	}
-
-	destinationAccJournal := models.AccountJournal{
-		BusinessId:          businessId,
-		BranchId:            destinationBranchId,
-		TransactionDateTime: transactionTime,
-		TransactionNumber:   strconv.Itoa(transferOrder.ID),
-		ReferenceId:         transferOrder.ID,
-		ReferenceType:       models.AccountReferenceTypeTransferOrder,
-		AccountTransactions: destinationAccTransactions,
-	}
-
-	err = tx.Create(&destinationAccJournal).Error
-	if err != nil {
-		tx.Rollback()
-		config.LogError(logger, "TransferOrderWorkflow.go", "CreateTransferOrder", "CreateDestinationAccountJournal", accJournal, err)
-		return 0, nil, 0, err
 	}
 
 	valuationAccountIds, err = ProcessIncomingStocks(tx, logger, transferInStockHistories)
