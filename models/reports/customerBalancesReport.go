@@ -283,7 +283,7 @@ WITH AccTransactionSummary AS
         AND at.business_id = @businessId
         AND aj.is_reversal = 0
         AND aj.reversed_by_journal_id IS NULL
-        at.account_id = @receivableAccId
+        AND at.account_id = @receivableAccId
         {{- if .toDate }} AND aj.transaction_date_time <= @transactionDate {{- end }}
         {{- if .branchId }} AND aj.branch_id = @branchId {{- end }}
     GROUP BY
