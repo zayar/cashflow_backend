@@ -192,40 +192,58 @@ func CreateOpeningBalance(tx *gorm.DB, logger *logrus.Logger, recordId int, reco
 
 func DeleteOpeningBalance(tx *gorm.DB, logger *logrus.Logger, recordId int, recordType string, businessId string, business models.Business, oldOpeningBalance models.OpeningBalance) (int, []int, *time.Time, error) {
 
-	var accountJournal models.AccountJournal
 	accountIds := make([]int, 0)
 
-	var count int64
-	err := tx.Model(&accountJournal).Where("business_id = ? AND branch_id = ? AND reference_type = ?", businessId, oldOpeningBalance.BranchId, models.AccountReferenceTypeOpeningBalance).Count(&count).Error
-	if err != nil {
-		config.LogError(logger, "OpeningBalanceWorkflow.go", "DeleteOpeningBalance", "GetExistingAccountJournal", oldOpeningBalance, err)
+	// Reverse ALL active opening balance journals for this business+branch.
+	// If multiple exist (e.g. user saved Opening Balance twice), reports will show duplicates.
+	var journals []models.AccountJournal
+	if err := tx.
+		Preload("AccountTransactions").
+		Where("business_id = ? AND branch_id = ? AND reference_type = ? AND is_reversal = 0 AND reversed_by_journal_id IS NULL",
+			businessId, oldOpeningBalance.BranchId, models.AccountReferenceTypeOpeningBalance).
+		Order("id ASC").
+		Find(&journals).Error; err != nil {
+		config.LogError(logger, "OpeningBalanceWorkflow.go", "DeleteOpeningBalance", "GetExistingAccountJournals", oldOpeningBalance, err)
 		return 0, nil, nil, err
 	}
-	if count <= 0 {
-		return 0, nil, nil, err
+	if len(journals) == 0 {
+		return 0, nil, nil, nil
 	}
 
-	err = tx.Preload("AccountTransactions").Where("business_id = ? AND branch_id = ? AND reference_type = ?", businessId, oldOpeningBalance.BranchId, models.AccountReferenceTypeOpeningBalance).First(&accountJournal).Error
-	if err != nil {
-		config.LogError(logger, "OpeningBalanceWorkflow.go", "DeleteOpeningBalance", "GetExistingAccountJournal", oldOpeningBalance, err)
-		return 0, nil, nil, err
-	}
-	for _, transaction := range accountJournal.AccountTransactions {
-		if !slices.Contains(accountIds, transaction.AccountId) {
-			accountIds = append(accountIds, transaction.AccountId)
+	var (
+		lastReversalID int
+		oldestTime     *time.Time
+	)
+	for _, j := range journals {
+		// collect accounts touched
+		for _, transaction := range j.AccountTransactions {
+			if !slices.Contains(accountIds, transaction.AccountId) {
+				accountIds = append(accountIds, transaction.AccountId)
+			}
 		}
+		// record oldest txn time for balance recalculation window
+		if oldestTime == nil || j.TransactionDateTime.Before(*oldestTime) {
+			t := j.TransactionDateTime
+			oldestTime = &t
+		}
+		// Phase 1: do not delete posted journals; create a reversal journal instead.
+		reversalID, err := ReverseAccountJournal(tx, &j, ReversalReasonOpeningBalanceResetVoid)
+		if err != nil {
+			config.LogError(logger, "OpeningBalanceWorkflow.go", "DeleteOpeningBalance", "ReverseAccountJournal", j, err)
+			return 0, nil, nil, err
+		}
+		lastReversalID = reversalID
 	}
-	// Phase 1: do not delete posted journals; create a reversal journal instead.
-	reversalID, err := ReverseAccountJournal(tx, &accountJournal, ReversalReasonOpeningBalanceResetVoid)
-	if err != nil {
-		config.LogError(logger, "OpeningBalanceWorkflow.go", "DeleteOpeningBalance", "ReverseAccountJournal", accountJournal, err)
+
+	// Delete BankingTransactions created for opening balances ONLY for this business+branch.
+	// (Previously this was unscoped and could delete rows across other businesses/branches.)
+	if err := tx.
+		Where("business_id = ? AND branch_id = ? AND transaction_type = ?",
+			businessId, oldOpeningBalance.BranchId, models.BankingTransactionTypeOpeningBalance).
+		Delete(&models.BankingTransaction{}).Error; err != nil {
+		config.LogError(logger, "OpeningBalanceWorkflow.go", "DeleteOpeningBalance", "DeleteBankingTransaction", oldOpeningBalance, err)
 		return 0, nil, nil, err
 	}
 
-	err = tx.Where("transaction_type = ?", models.BankingTransactionTypeOpeningBalance).Delete(&models.BankingTransaction{}).Error
-	if err != nil {
-		config.LogError(logger, "OpeningBalanceWorkflow.go", "DeleteOpeningBalance", "DeleteBankingTransaction", accountJournal, err)
-		return 0, nil, nil, err
-	}
-	return reversalID, accountIds, &accountJournal.TransactionDateTime, nil
+	return lastReversalID, accountIds, oldestTime, nil
 }
