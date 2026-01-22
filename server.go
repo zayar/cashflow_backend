@@ -102,6 +102,24 @@ func (c *Cache) Get(ctx context.Context, key string) (interface{}, bool) {
 
 func accountingPubSubHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// IMPORTANT:
+		// In production we want ONLY the dedicated worker service to process Pub/Sub pushes.
+		// If this endpoint is hit on an API service (misconfigured subscription), we should ACK (204) and ignore,
+		// to avoid retries and to prevent accidental double-processing.
+		if !envBoolDefault("ENABLE_PUBSUB_PUSH_ENDPOINT", true) {
+			logger := config.GetLogger()
+			if logger != nil {
+				cid, _ := utils.GetCorrelationIdFromContext(c.Request.Context())
+				logger.WithFields(logrus.Fields{
+					"field":          "accountingPubSubHandler",
+					"correlation_id": cid,
+					"path":           c.Request.URL.Path,
+				}).Warn("pubsub push endpoint disabled on this service; acknowledging without processing")
+			}
+			c.Status(http.StatusNoContent)
+			return
+		}
+
 		var msg PubSubMessage
 		logger := config.GetLogger()
 
@@ -880,8 +898,14 @@ func main() {
 	// Start outbox dispatcher (publishes AFTER commit).
 	dispatcherCtx, cancelDispatcher := context.WithCancel(context.Background())
 	defer cancelDispatcher()
-	go workflow.NewOutboxDispatcher(db, logger).Run(dispatcherCtx)
-	if shouldRunDirectOutboxProcessor() {
+	if envBoolDefault("OUTBOX_RUN_DISPATCHER", true) {
+		go workflow.NewOutboxDispatcher(db, logger).Run(dispatcherCtx)
+	} else if logger != nil {
+		logger.WithFields(logrus.Fields{"field": "OutboxDispatcher"}).
+			Warn("OUTBOX_RUN_DISPATCHER=false; outbox publishing loop is disabled on this service")
+	}
+
+	if envBoolDefault("OUTBOX_RUN_DIRECT_PROCESSOR", true) && shouldRunDirectOutboxProcessor() {
 		go NewOutboxDirectProcessor(db, logger).Run(dispatcherCtx)
 		if logger != nil {
 			logger.WithFields(logrus.Fields{"field": "OutboxDirectProcessor"}).
@@ -1013,4 +1037,19 @@ func splitAndTrim(csv string) []string {
 		}
 	}
 	return out
+}
+
+// envBoolDefault parses a boolean-like env var with a default.
+// Accepted truthy: "true", "1", "yes", "y", "on"
+// Accepted falsy:  "false", "0", "no", "n", "off"
+func envBoolDefault(key string, def bool) bool {
+	val := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	switch val {
+	case "true", "1", "yes", "y", "on":
+		return true
+	case "false", "0", "no", "n", "off":
+		return false
+	default:
+		return def
+	}
 }
