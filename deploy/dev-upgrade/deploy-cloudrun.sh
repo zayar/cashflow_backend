@@ -168,11 +168,12 @@ sys.exit(0)
 PY
 }
 
+ENV_VARS=()
 add_env_literal() {
   local key="$1"
   local val="$2"
   if should_set_literal_env "$key"; then
-    DEPLOY_ARGS+=(--set-env-vars "$key=$val")
+    ENV_VARS+=("$key=$val")
   else
     echo "Skipping $key (already configured as secret on $SERVICE_NAME)"
   fi
@@ -206,13 +207,13 @@ add_env_literal "GCS_BUCKET" "$GCS_BUCKET"
 add_env_literal "GCS_URL" "$GCS_URL"
 
 if [[ -n "$STORAGE_ACCESS_BASE_URL" ]]; then
-  DEPLOY_ARGS+=(--set-env-vars "STORAGE_ACCESS_BASE_URL=$STORAGE_ACCESS_BASE_URL")
+  add_env_literal "STORAGE_ACCESS_BASE_URL" "$STORAGE_ACCESS_BASE_URL"
 fi
 if [[ -n "$GCS_SIGNER_EMAIL" ]]; then
-  DEPLOY_ARGS+=(--set-env-vars "GCS_SIGNER_EMAIL=$GCS_SIGNER_EMAIL")
+  add_env_literal "GCS_SIGNER_EMAIL" "$GCS_SIGNER_EMAIL"
 fi
 if [[ -n "$GCS_SIGNER_PRIVATE_KEY" ]]; then
-  DEPLOY_ARGS+=(--set-env-vars "GCS_SIGNER_PRIVATE_KEY=$GCS_SIGNER_PRIVATE_KEY")
+  add_env_literal "GCS_SIGNER_PRIVATE_KEY" "$GCS_SIGNER_PRIVATE_KEY"
 fi
 
 if [[ -n "$VPC_CONNECTOR" ]]; then
@@ -228,6 +229,11 @@ fi
 # or update:
 #   echo -n 'your-db-password' | gcloud secrets versions add db-password-dev-upgrade --data-file=-
 DEPLOY_ARGS+=(--set-secrets "DB_PASSWORD=db-password-dev-upgrade:latest")
+
+if (( ${#ENV_VARS[@]} > 0 )); then
+  ENV_VARS_CSV="$(IFS=, ; echo "${ENV_VARS[*]}")"
+  DEPLOY_ARGS+=(--set-env-vars "$ENV_VARS_CSV")
+fi
 
 gcloud "${DEPLOY_ARGS[@]}"
 
