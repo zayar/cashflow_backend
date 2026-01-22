@@ -134,8 +134,43 @@ if [[ "$SERVICE_ROLE" == "api" ]]; then
 fi
 
 SERVICE_JSON=""
+SERVICE_EXISTS=false
 if gcloud run services describe "$SERVICE_NAME" --region "$REGION" --format='value(metadata.name)' 1>/dev/null 2>&1; then
+  SERVICE_EXISTS=true
   SERVICE_JSON="$(gcloud run services describe "$SERVICE_NAME" --region "$REGION" --format=json)"
+fi
+
+# CRITICAL: DB connection vars (DB_HOST, DB_PORT, DB_USER, DB_NAME_2) must be literals, not secrets.
+# If they're secret-typed on an existing service, remove them first so deploy can set them as literals.
+if [[ "$SERVICE_EXISTS" == "true" ]]; then
+  DB_VARS_TO_FORCE=()
+  python3 - <<'PY' <<<"${SERVICE_JSON}" | while IFS= read -r key; do
+import json,sys
+try:
+  data=json.load(sys.stdin)
+except Exception:
+  sys.exit(0)
+env=[]
+try:
+  env=data["spec"]["template"]["spec"]["containers"][0].get("env",[])
+except Exception:
+  env=[]
+for e in env:
+  name=e.get("name","")
+  if name in ("DB_HOST","DB_PORT","DB_USER","DB_NAME_2") and e.get("valueFrom"):
+    print(name)
+PY
+    [[ -n "$key" ]] && DB_VARS_TO_FORCE+=("$key")
+  done
+  
+  if (( ${#DB_VARS_TO_FORCE[@]} > 0 )); then
+    echo "Removing secret-typed DB vars before deploy: ${DB_VARS_TO_FORCE[*]}"
+    DB_VARS_CSV="$(IFS=, ; echo "${DB_VARS_TO_FORCE[*]}")"
+    gcloud run services update "$SERVICE_NAME" \
+      --region "$REGION" \
+      --remove-env-vars "$DB_VARS_CSV" \
+      --quiet || true
+  fi
 fi
 
 # If a variable already exists on the service as a Secret (valueFrom), Cloud Run does NOT allow
@@ -172,7 +207,11 @@ ENV_VARS=()
 add_env_literal() {
   local key="$1"
   local val="$2"
-  if should_set_literal_env "$key"; then
+  # CRITICAL: DB connection vars must ALWAYS be set as literals (never skip).
+  # If DB_HOST/DB_PORT/DB_USER/DB_NAME_2 are missing, the service will crash on startup.
+  if [[ "$key" == "DB_HOST" || "$key" == "DB_PORT" || "$key" == "DB_USER" || "$key" == "DB_NAME_2" ]]; then
+    ENV_VARS+=("$key=$val")
+  elif should_set_literal_env "$key"; then
     ENV_VARS+=("$key=$val")
   else
     echo "Skipping $key (already configured as secret on $SERVICE_NAME)"
