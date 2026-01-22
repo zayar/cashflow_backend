@@ -133,50 +133,50 @@ if [[ "$SERVICE_ROLE" == "api" ]]; then
   AUTH_FLAG="--allow-unauthenticated"
 fi
 
-# If the service already exists, some variables may have been set as a different "type"
-# (e.g. from Console UI: Secret vs literal). Cloud Run forbids changing env var type in-place.
-# To make deploy idempotent, remove the vars we manage, then set them again.
-#
-# Example error we avoid:
-#   Cannot update environment variable [DB_USER] to string literal because it has already been set with a different type.
-REMOVE_ENV_VARS=(
-  API_PORT_2
-  DB_USER
-  DB_PORT
-  DB_HOST
-  DB_NAME_2
-  DB_PASSWORD
-  REDIS_ADDRESS
-  TOKEN_HOUR_LIFESPAN
-  GO_ENV
-  PUBSUB_PROJECT_ID
-  PUBSUB_TOPIC
-  PUBSUB_SUBSCRIPTION
-  OUTBOX_DIRECT_PROCESSING
-  ENABLE_PUBSUB_PUSH_ENDPOINT
-  OUTBOX_RUN_DISPATCHER
-  OUTBOX_RUN_DIRECT_PROCESSOR
-  STORAGE_PROVIDER
-  GCS_BUCKET
-  GCS_URL
-  STORAGE_ACCESS_BASE_URL
-  GCS_SIGNER_EMAIL
-  GCS_SIGNER_PRIVATE_KEY
-)
-REMOVE_ENV_VARS_CSV="$(IFS=, ; echo "${REMOVE_ENV_VARS[*]}")"
-
-# NOTE: Newer gcloud versions do NOT allow mixing env-var operations in `gcloud run deploy`
-# (it enforces "at most one of --set-env-vars/--remove-env-vars/...").
-# To keep deploy working, do the cleanup as a separate `services update` call first.
+SERVICE_JSON=""
 if gcloud run services describe "$SERVICE_NAME" --region "$REGION" --format='value(metadata.name)' 1>/dev/null 2>&1; then
-  echo "Normalizing env var types on existing service ($SERVICE_NAME)..."
-  # Best-effort removal of vars that may have been set as secrets/literals previously.
-  # If a var doesn't exist, gcloud may error; ignore and continue.
-  gcloud run services update "$SERVICE_NAME" \
-    --region "$REGION" \
-    --remove-env-vars "$REMOVE_ENV_VARS_CSV" \
-    --quiet || true
+  SERVICE_JSON="$(gcloud run services describe "$SERVICE_NAME" --region "$REGION" --format=json)"
 fi
+
+# If a variable already exists on the service as a Secret (valueFrom), Cloud Run does NOT allow
+# overwriting it with a literal value. Instead of failing deploy, we skip setting that variable
+# and keep the existing value/type.
+should_set_literal_env() {
+  local key="$1"
+  if [[ -z "${SERVICE_JSON}" ]]; then
+    return 0
+  fi
+  python3 - "$key" <<'PY' <<<"${SERVICE_JSON}" >/dev/null 2>&1
+import json,sys
+key=sys.argv[1]
+try:
+  data=json.load(sys.stdin)
+except Exception:
+  sys.exit(0)  # no service json -> allow set
+env=[]
+try:
+  env=data["spec"]["template"]["spec"]["containers"][0].get("env",[])
+except Exception:
+  env=[]
+for e in env:
+  if e.get("name")==key:
+    # secret typed if valueFrom is present
+    if e.get("valueFrom"):
+      sys.exit(1)
+    sys.exit(0)
+sys.exit(0)
+PY
+}
+
+add_env_literal() {
+  local key="$1"
+  local val="$2"
+  if should_set_literal_env "$key"; then
+    DEPLOY_ARGS+=(--set-env-vars "$key=$val")
+  else
+    echo "Skipping $key (already configured as secret on $SERVICE_NAME)"
+  fi
+}
 
 DEPLOY_ARGS=(
   run deploy "$SERVICE_NAME"
@@ -184,25 +184,26 @@ DEPLOY_ARGS=(
   --source .
   "$AUTH_FLAG"
   --add-cloudsql-instances "$CLOUDSQL_CONNECTION_NAME"
-  --set-env-vars "API_PORT_2=8080"
-  --set-env-vars "DB_USER=$DB_USER"
-  --set-env-vars "DB_PORT=$DB_PORT"
-  --set-env-vars "DB_HOST=/cloudsql/$CLOUDSQL_CONNECTION_NAME"
-  --set-env-vars "DB_NAME_2=$DB_NAME_2"
-  --set-env-vars "REDIS_ADDRESS=$REDIS_ADDRESS"
-  --set-env-vars "TOKEN_HOUR_LIFESPAN=$TOKEN_HOUR_LIFESPAN"
-  --set-env-vars "GO_ENV=$GO_ENV"
-  --set-env-vars "PUBSUB_PROJECT_ID=$PROJECT_ID"
-  --set-env-vars "PUBSUB_TOPIC=$PUBSUB_TOPIC"
-  --set-env-vars "PUBSUB_SUBSCRIPTION=$PUBSUB_SUBSCRIPTION"
-  --set-env-vars "OUTBOX_DIRECT_PROCESSING=$OUTBOX_DIRECT_PROCESSING"
-  --set-env-vars "ENABLE_PUBSUB_PUSH_ENDPOINT=$ENABLE_PUBSUB_PUSH_ENDPOINT"
-  --set-env-vars "OUTBOX_RUN_DISPATCHER=$OUTBOX_RUN_DISPATCHER"
-  --set-env-vars "OUTBOX_RUN_DIRECT_PROCESSOR=$OUTBOX_RUN_DIRECT_PROCESSOR"
-  --set-env-vars "STORAGE_PROVIDER=$STORAGE_PROVIDER"
-  --set-env-vars "GCS_BUCKET=$GCS_BUCKET"
-  --set-env-vars "GCS_URL=$GCS_URL"
 )
+
+add_env_literal "API_PORT_2" "8080"
+add_env_literal "DB_USER" "$DB_USER"
+add_env_literal "DB_PORT" "$DB_PORT"
+add_env_literal "DB_HOST" "/cloudsql/$CLOUDSQL_CONNECTION_NAME"
+add_env_literal "DB_NAME_2" "$DB_NAME_2"
+add_env_literal "REDIS_ADDRESS" "$REDIS_ADDRESS"
+add_env_literal "TOKEN_HOUR_LIFESPAN" "$TOKEN_HOUR_LIFESPAN"
+add_env_literal "GO_ENV" "$GO_ENV"
+add_env_literal "PUBSUB_PROJECT_ID" "$PROJECT_ID"
+add_env_literal "PUBSUB_TOPIC" "$PUBSUB_TOPIC"
+add_env_literal "PUBSUB_SUBSCRIPTION" "$PUBSUB_SUBSCRIPTION"
+add_env_literal "OUTBOX_DIRECT_PROCESSING" "$OUTBOX_DIRECT_PROCESSING"
+add_env_literal "ENABLE_PUBSUB_PUSH_ENDPOINT" "$ENABLE_PUBSUB_PUSH_ENDPOINT"
+add_env_literal "OUTBOX_RUN_DISPATCHER" "$OUTBOX_RUN_DISPATCHER"
+add_env_literal "OUTBOX_RUN_DIRECT_PROCESSOR" "$OUTBOX_RUN_DIRECT_PROCESSOR"
+add_env_literal "STORAGE_PROVIDER" "$STORAGE_PROVIDER"
+add_env_literal "GCS_BUCKET" "$GCS_BUCKET"
+add_env_literal "GCS_URL" "$GCS_URL"
 
 if [[ -n "$STORAGE_ACCESS_BASE_URL" ]]; then
   DEPLOY_ARGS+=(--set-env-vars "STORAGE_ACCESS_BASE_URL=$STORAGE_ACCESS_BASE_URL")
