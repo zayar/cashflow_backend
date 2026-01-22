@@ -442,13 +442,26 @@ func GetRemainingStockHistoriesByDate(tx *gorm.DB, warehouseId int, productId in
 	var remaininigStockHistories []*models.StockHistory
 	var err error
 	if isOutgoing != nil && *isOutgoing {
-		err = tx.Raw(`
-			SELECT * FROM stock_histories
-			WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
-				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = true AND stock_date >= ?
-				AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
-			ORDER BY stock_date, is_outgoing, id ASC;
-			`, warehouseId, warehouseId, productId, productType, batchNumber, stockDate).Find(&remaininigStockHistories).Error
+		// Outgoing: default is strict batch matching. However, when batchNumber == "" we treat batches as fungible
+		// (unbatched sales can consume from any incoming batch). To keep FIFO consumption consistent, we must also
+		// include ALL outgoing rows (across batches) in that mode.
+		if batchNumber == "" {
+			err = tx.Raw(`
+				SELECT * FROM stock_histories
+				WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
+					AND warehouse_id = ? AND product_id = ? AND product_type = ? AND is_outgoing = true AND stock_date >= ?
+					AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
+				ORDER BY stock_date, is_outgoing, id ASC;
+				`, warehouseId, warehouseId, productId, productType, stockDate).Find(&remaininigStockHistories).Error
+		} else {
+			err = tx.Raw(`
+				SELECT * FROM stock_histories
+				WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
+					AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = true AND stock_date >= ?
+					AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
+				ORDER BY stock_date, is_outgoing, id ASC;
+				`, warehouseId, warehouseId, productId, productType, batchNumber, stockDate).Find(&remaininigStockHistories).Error
+		}
 	} else {
 		if batchNumber == "" {
 			err = tx.Raw(`
@@ -470,6 +483,77 @@ func GetRemainingStockHistoriesByDate(tx *gorm.DB, warehouseId int, productId in
 	}
 
 	return remaininigStockHistories, err
+}
+
+// getGlobalOutgoingQtyBeforeDate returns total outgoing qty before the given date, across ALL batches.
+// This is required when batchNumber == "" (fungible batch mode), because cumulative_outgoing_qty is tracked per batch stream.
+func getGlobalOutgoingQtyBeforeDate(tx *gorm.DB, businessId string, warehouseId int, productId int, productType models.ProductType, before time.Time) (decimal.Decimal, error) {
+	var total decimal.Decimal
+	err := tx.Raw(`
+		SELECT COALESCE(SUM(ABS(qty)), 0) AS total
+		FROM stock_histories
+		WHERE business_id = ?
+		  AND warehouse_id = ?
+		  AND product_id = ?
+		  AND product_type = ?
+		  AND is_outgoing = 1
+		  AND stock_date < ?
+		  AND is_reversal = 0
+		  AND reversed_by_stock_history_id IS NULL
+	`, businessId, warehouseId, productId, productType, before).Scan(&total).Error
+	return total, err
+}
+
+// getRemainingIncomingStockHistoriesFungible returns incoming layers (across ALL batches) after consuming consumedQty.
+// It also returns the adjusted qty remaining for the first layer (startCurrentQty) so FIFO starts at the correct partial layer.
+func getRemainingIncomingStockHistoriesFungible(tx *gorm.DB, businessId string, warehouseId int, productId int, productType models.ProductType, consumedQty decimal.Decimal) ([]*models.StockHistory, decimal.Decimal, error) {
+	var incoming []*models.StockHistory
+	err := tx.Raw(`
+		SELECT *
+		FROM stock_histories
+		WHERE business_id = ?
+		  AND warehouse_id = ?
+		  AND product_id = ?
+		  AND product_type = ?
+		  AND is_outgoing = 0
+		  AND is_reversal = 0
+		  AND reversed_by_stock_history_id IS NULL
+		ORDER BY stock_date, is_outgoing, id ASC;
+	`, businessId, warehouseId, productId, productType).Find(&incoming).Error
+	if err != nil {
+		return nil, decimal.Zero, err
+	}
+	if len(incoming) == 0 {
+		return []*models.StockHistory{}, decimal.Zero, nil
+	}
+
+	cum := decimal.Zero
+	idx := -1
+	for i, sh := range incoming {
+		if sh == nil {
+			continue
+		}
+		cum = cum.Add(sh.Qty)
+		if cum.GreaterThan(consumedQty) {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return []*models.StockHistory{}, decimal.Zero, nil
+	}
+
+	startCurrentQty := cum.Sub(consumedQty)
+	firstCopy := new(models.StockHistory)
+	*firstCopy = *incoming[idx]
+	firstCopy.Qty = startCurrentQty
+
+	remaining := make([]*models.StockHistory, 0, len(incoming)-idx)
+	remaining = append(remaining, firstCopy)
+	if idx+1 < len(incoming) {
+		remaining = append(remaining, incoming[idx+1:]...)
+	}
+	return remaining, startCurrentQty, nil
 }
 
 // Calculate CostOfGoodsSold
@@ -1696,22 +1780,38 @@ func ProcessOutgoingStocks(tx *gorm.DB, logger *logrus.Logger, stockHistories []
 			}
 		}
 
-		remainingIncomingStockHistories, err := GetRemainingStockHistoriesByCumulativeQty(tx, stockHistory.WarehouseId, stockHistory.ProductId, string(stockHistory.ProductType), stockHistory.BatchNumber, utils.NewFalse(), lastCumulativeOutgoingQty)
-		if err != nil {
-			config.LogError(logger, "MainWorkflow.go", "ProcessOutgoingStocks", "GetRemainingStockHistoriesByCumulativeQty", stockHistory, err)
-			return accountIds, err
+		var remainingIncomingStockHistories []*models.StockHistory
+		var remainingOutgoingStockHistories []*models.StockHistory
+		startCurrentQty := decimal.NewFromInt(0)
+
+		if stockHistory.BatchNumber == "" {
+			consumedBefore, e := getGlobalOutgoingQtyBeforeDate(tx, stockHistory.BusinessId, stockHistory.WarehouseId, stockHistory.ProductId, stockHistory.ProductType, stockHistory.StockDate)
+			if e != nil {
+				config.LogError(logger, "MainWorkflow.go", "ProcessOutgoingStocks", "GetGlobalOutgoingQtyBeforeDate", stockHistory, e)
+				return accountIds, e
+			}
+			remainingIncomingStockHistories, startCurrentQty, e = getRemainingIncomingStockHistoriesFungible(tx, stockHistory.BusinessId, stockHistory.WarehouseId, stockHistory.ProductId, stockHistory.ProductType, consumedBefore)
+			if e != nil {
+				config.LogError(logger, "MainWorkflow.go", "ProcessOutgoingStocks", "GetRemainingIncomingStockHistoriesFungible", stockHistory, e)
+				return accountIds, e
+			}
+		} else {
+			remainingIncomingStockHistories, err = GetRemainingStockHistoriesByCumulativeQty(tx, stockHistory.WarehouseId, stockHistory.ProductId, string(stockHistory.ProductType), stockHistory.BatchNumber, utils.NewFalse(), lastCumulativeOutgoingQty)
+			if err != nil {
+				config.LogError(logger, "MainWorkflow.go", "ProcessOutgoingStocks", "GetRemainingStockHistoriesByCumulativeQty", stockHistory, err)
+				return accountIds, err
+			}
+			if len(remainingIncomingStockHistories) > 0 {
+				startCurrentQty = remainingIncomingStockHistories[0].CumulativeIncomingQty.Sub(lastCumulativeOutgoingQty)
+			}
 		}
-		remainingOutgoingStockHistories, err := GetRemainingStockHistoriesByDate(tx, stockHistory.WarehouseId, stockHistory.ProductId, string(stockHistory.ProductType), stockHistory.BatchNumber, stockHistory.IsOutgoing, stockHistory.StockDate)
+
+		remainingOutgoingStockHistories, err = GetRemainingStockHistoriesByDate(tx, stockHistory.WarehouseId, stockHistory.ProductId, string(stockHistory.ProductType), stockHistory.BatchNumber, stockHistory.IsOutgoing, stockHistory.StockDate)
 		if err != nil {
 			config.LogError(logger, "MainWorkflow.go", "ProcessOutgoingStocks", "GetRemainingStockHistoriesByDate", stockHistory, err)
 			return accountIds, err
 		}
 		remainingIncomingStockHistories, remainingOutgoingStockHistories = FilterStockHistories(remainingIncomingStockHistories, remainingOutgoingStockHistories)
-
-		startCurrentQty := decimal.NewFromInt(0)
-		if len(remainingIncomingStockHistories) > 0 {
-			startCurrentQty = remainingIncomingStockHistories[0].CumulativeIncomingQty.Sub(lastCumulativeOutgoingQty)
-		}
 
 		accountIds, err = calculateCogs(tx, logger, productDetail, decimal.NewFromInt(0), startCurrentQty, remainingIncomingStockHistories, remainingOutgoingStockHistories, stockHistory.ReferenceID, stockHistory.ReferenceType)
 		if err != nil {

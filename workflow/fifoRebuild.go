@@ -80,17 +80,31 @@ func rebuildInventoryForScope(tx *gorm.DB, logger *logrus.Logger, businessId str
 	start := fallbackStart
 	type row struct{ Start time.Time }
 	var r row
-	_ = tx.Raw(`
-		SELECT COALESCE(MIN(stock_date), ?) AS start
-		FROM stock_histories
-		WHERE business_id = ?
-		  AND warehouse_id = ?
-		  AND product_id = ?
-		  AND product_type = ?
-		  AND COALESCE(batch_number,'') = ?
-		  AND is_reversal = 0
-		  AND reversed_by_stock_history_id IS NULL
-	`, fallbackStart, businessId, scope.warehouseId, scope.productId, scope.productType, scope.batch).Scan(&r).Error
+	// If batch is empty, treat stock as fungible across batches: don't filter by batch_number.
+	if scope.batch == "" {
+		_ = tx.Raw(`
+			SELECT COALESCE(MIN(stock_date), ?) AS start
+			FROM stock_histories
+			WHERE business_id = ?
+			  AND warehouse_id = ?
+			  AND product_id = ?
+			  AND product_type = ?
+			  AND is_reversal = 0
+			  AND reversed_by_stock_history_id IS NULL
+		`, fallbackStart, businessId, scope.warehouseId, scope.productId, scope.productType).Scan(&r).Error
+	} else {
+		_ = tx.Raw(`
+			SELECT COALESCE(MIN(stock_date), ?) AS start
+			FROM stock_histories
+			WHERE business_id = ?
+			  AND warehouse_id = ?
+			  AND product_id = ?
+			  AND product_type = ?
+			  AND COALESCE(batch_number,'') = ?
+			  AND is_reversal = 0
+			  AND reversed_by_stock_history_id IS NULL
+		`, fallbackStart, businessId, scope.warehouseId, scope.productId, scope.productType, scope.batch).Scan(&r).Error
+	}
 	if !r.Start.IsZero() {
 		start = r.Start
 	}
@@ -99,4 +113,3 @@ func rebuildInventoryForScope(tx *gorm.DB, logger *logrus.Logger, businessId str
 	)
 	return err
 }
-
