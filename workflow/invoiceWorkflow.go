@@ -39,6 +39,15 @@ func ProcessInvoiceWorkflow(tx *gorm.DB, logger *logrus.Logger, msg config.PubSu
 		}
 		valuationAccountIds, err := ProcessOutgoingStocks(tx, logger, stockHistories)
 		if err != nil {
+			// Self-heal: FIFO layer inconsistencies can prevent ledger posting.
+			// Attempt a targeted rebuild for the affected (warehouse, product, batch) and retry once.
+			if scope, ok := parseFifoInsufficientScope(err); ok {
+				if rerr := rebuildInventoryForScope(tx, logger, msg.BusinessId, scope, invoice.InvoiceDate); rerr == nil {
+					valuationAccountIds, err = ProcessOutgoingStocks(tx, logger, stockHistories)
+				}
+			}
+		}
+		if err != nil {
 			config.LogError(logger, "InvoiceWorkflow.go", "ProcessInvoiceWorkflow > Create", "ProcessInventoryValuation", stockHistories, err)
 			return err
 		}
@@ -85,6 +94,13 @@ func ProcessInvoiceWorkflow(tx *gorm.DB, logger *logrus.Logger, msg config.PubSu
 		mergedStockHistories := mergeStockHistories(stockHistories, oldStockHistories)
 		valuationAccountIds, err := ProcessStockHistories(tx, logger, mergedStockHistories)
 		if err != nil {
+			if scope, ok := parseFifoInsufficientScope(err); ok {
+				if rerr := rebuildInventoryForScope(tx, logger, msg.BusinessId, scope, invoice.InvoiceDate); rerr == nil {
+					valuationAccountIds, err = ProcessStockHistories(tx, logger, mergedStockHistories)
+				}
+			}
+		}
+		if err != nil {
 			config.LogError(logger, "InvoiceWorkflow.go", "ProcessInvoiceWorkflow > Update", "ProcessInventoryValuation", mergedStockHistories, err)
 			return err
 		}
@@ -124,6 +140,13 @@ func ProcessInvoiceWorkflow(tx *gorm.DB, logger *logrus.Logger, msg config.PubSu
 			return err
 		}
 		valuationAccountIds, err := ProcessStockHistories(tx, logger, stockHistories)
+		if err != nil {
+			if scope, ok := parseFifoInsufficientScope(err); ok {
+				if rerr := rebuildInventoryForScope(tx, logger, msg.BusinessId, scope, oldInvoice.InvoiceDate); rerr == nil {
+					valuationAccountIds, err = ProcessStockHistories(tx, logger, stockHistories)
+				}
+			}
+		}
 		if err != nil {
 			config.LogError(logger, "InvoiceWorkflow.go", "ProcessInvoiceWorkflow > Delete", "ProcessOutgoingStocks", stockHistories, err)
 			return err
