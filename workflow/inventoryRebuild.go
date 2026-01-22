@@ -80,7 +80,7 @@ func RebuildInventoryForItemWarehouseFromDate(
 
 	var beforeOutgoingCount int64
 	_ = tx.Model(&models.StockHistory{}).
-		Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND is_outgoing = 1 AND stock_date >= ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
+		Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = 1 AND stock_date >= ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
 			businessId, warehouseId, productId, productType, batchNumber, normalizedStart).
 		Count(&beforeOutgoingCount).Error
 
@@ -88,7 +88,7 @@ func RebuildInventoryForItemWarehouseFromDate(
 	lastCumulativeOutgoingQty := decimal.Zero
 	var lastOut models.StockHistory
 	err = tx.
-		Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND is_outgoing = 1 AND stock_date < ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
+		Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = 1 AND stock_date < ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
 			businessId, warehouseId, productId, productType, batchNumber, normalizedStart).
 		Order("stock_date DESC, is_outgoing DESC, id DESC").
 		Limit(1).
@@ -163,7 +163,7 @@ func RebuildInventoryForItemWarehouseFromDate(
 
 	var afterOutgoingCount int64
 	_ = tx.Model(&models.StockHistory{}).
-		Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND is_outgoing = 1 AND stock_date >= ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
+		Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = 1 AND stock_date >= ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
 			businessId, warehouseId, productId, productType, batchNumber, normalizedStart).
 		Count(&afterOutgoingCount).Error
 
@@ -177,7 +177,7 @@ func RebuildInventoryForItemWarehouseFromDate(
 			COALESCE(SUM(qty), 0) AS qty,
 			COALESCE(SUM(qty * base_unit_value), 0) AS asset_value
 		FROM stock_histories
-		WHERE business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ?
+		WHERE business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ?
 			AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
 	`, businessId, warehouseId, productId, productType, batchNumber).Scan(&t).Error
 

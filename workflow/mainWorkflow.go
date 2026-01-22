@@ -346,7 +346,7 @@ func GetRemainingStockHistoriesByCumulativeQty(tx *gorm.DB, warehouseId int, pro
 		err = tx.Raw(`
 			SELECT * FROM stock_histories
 			WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
-				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND is_outgoing = true AND cumulative_outgoing_qty > ?
+				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = true AND cumulative_outgoing_qty > ?
 				AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
 			ORDER BY stock_date, is_outgoing, id ASC;
 			`, warehouseId, warehouseId, productId, productType, batchNumber, qty).Find(&remaininigStockHistories).Error
@@ -358,7 +358,7 @@ func GetRemainingStockHistoriesByCumulativeQty(tx *gorm.DB, warehouseId int, pro
 			err = tx.Raw(`
 				SELECT * FROM stock_histories
 				WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
-					AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND is_outgoing = false AND cumulative_incoming_qty >= ?
+					AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = false AND cumulative_incoming_qty >= ?
 					AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
 				ORDER BY stock_date, is_outgoing, id ASC;
 				`, warehouseId, warehouseId, productId, productType, batchNumber, qty).Find(&remaininigStockHistories).Error
@@ -366,7 +366,7 @@ func GetRemainingStockHistoriesByCumulativeQty(tx *gorm.DB, warehouseId int, pro
 			err = tx.Raw(`
 				SELECT * FROM stock_histories
 				WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
-					AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND is_outgoing = false AND cumulative_incoming_qty > ?
+					AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = false AND cumulative_incoming_qty > ?
 					AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
 				ORDER BY stock_date, is_outgoing, id ASC;
 				`, warehouseId, warehouseId, productId, productType, batchNumber, qty).Find(&remaininigStockHistories).Error
@@ -385,7 +385,7 @@ func GetRemainingStockHistoriesByCumulativeQtyUntilDate(tx *gorm.DB, warehouseId
 		err = tx.Raw(`
 			SELECT * FROM stock_histories
 			WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
-				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND is_outgoing = true AND cumulative_outgoing_qty > ? AND stock_date <= ?
+				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = true AND cumulative_outgoing_qty > ? AND stock_date <= ?
 				AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
 			ORDER BY stock_date, is_outgoing, id ASC;
 			`, warehouseId, warehouseId, productId, productType, batchNumber, qty, stockDate).Find(&remaininigStockHistories).Error
@@ -393,7 +393,7 @@ func GetRemainingStockHistoriesByCumulativeQtyUntilDate(tx *gorm.DB, warehouseId
 		err = tx.Raw(`
 			SELECT * FROM stock_histories
 			WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
-				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND is_outgoing = false AND cumulative_incoming_qty > ? AND stock_date <= ?
+				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = false AND cumulative_incoming_qty > ? AND stock_date <= ?
 				AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
 			ORDER BY stock_date, is_outgoing, id ASC;
 			`, warehouseId, warehouseId, productId, productType, batchNumber, qty, stockDate).Find(&remaininigStockHistories).Error
@@ -410,7 +410,7 @@ func GetRemainingStockHistoriesByDate(tx *gorm.DB, warehouseId int, productId in
 		err = tx.Raw(`
 			SELECT * FROM stock_histories
 			WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
-				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND is_outgoing = true AND stock_date >= ?
+				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = true AND stock_date >= ?
 				AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
 			ORDER BY stock_date, is_outgoing, id ASC;
 			`, warehouseId, warehouseId, productId, productType, batchNumber, stockDate).Find(&remaininigStockHistories).Error
@@ -418,7 +418,7 @@ func GetRemainingStockHistoriesByDate(tx *gorm.DB, warehouseId int, productId in
 		err = tx.Raw(`
 			SELECT * FROM stock_histories
 			WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
-				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND is_outgoing = false AND stock_date >= ?
+				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = false AND stock_date >= ?
 				AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
 			ORDER BY stock_date, is_outgoing, id ASC;
 			`, warehouseId, warehouseId, productId, productType, batchNumber, stockDate).Find(&remaininigStockHistories).Error
@@ -460,7 +460,7 @@ func calculateCogs(tx *gorm.DB, logger *logrus.Logger, productDetail ProductDeta
 		if updatedReferenceId > 0 && updatedReferenceType != "" {
 			// Normal path: only scope to the updated reference.
 			err = tx.
-				Where("business_id = ? AND reference_type = ? AND reference_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND is_outgoing = 1 AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
+				Where("business_id = ? AND reference_type = ? AND reference_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = 1 AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
 					firstOutStock.BusinessId, updatedReferenceType, updatedReferenceId, firstOutStock.WarehouseId, firstOutStock.ProductId, firstOutStock.ProductType, firstOutStock.BatchNumber).
 				Find(&existingRefStockHistories).Error
 			if err != nil {
@@ -487,7 +487,7 @@ func calculateCogs(tx *gorm.DB, logger *logrus.Logger, productDetail ProductDeta
 			for refType, refIds := range refIdsByType {
 				var rows []*models.StockHistory
 				err = tx.
-					Where("business_id = ? AND reference_type = ? AND reference_id IN ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ? AND is_outgoing = 1 AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
+					Where("business_id = ? AND reference_type = ? AND reference_id IN ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = 1 AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
 						firstOutStock.BusinessId, refType, refIds, firstOutStock.WarehouseId, firstOutStock.ProductId, firstOutStock.ProductType, firstOutStock.BatchNumber).
 					Find(&rows).Error
 				if err != nil {
