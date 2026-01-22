@@ -488,23 +488,49 @@ func UpdateSalesOrder(ctx context.Context, saleOrderId int, updatedOrder *NewSal
 		totalDetailDiscountAmount,
 		totalDetailTaxAmount decimal.Decimal
 
-	// Iterate through the updated items
+	// Build a stable lookup for existing details (range over slice copies will break pointers).
+	existingByID := make(map[int]*SalesOrderDetail, len(existingOrder.Details))
+	for i := range existingOrder.Details {
+		d := &existingOrder.Details[i]
+		existingByID[d.ID] = d
+	}
 
+	// Iterate through the updated items and apply changes in a single transaction.
 	for _, updatedItem := range updatedOrder.Details {
-		var existingItem *SalesOrderDetail
-
-		// Check if the item already exists in the purchase order
-		for _, item := range existingOrder.Details {
-			if item.ID == updatedItem.DetailId {
-				existingItem = &item
-				break
+		// Delete
+		if updatedItem.IsDeletedItem != nil && *updatedItem.IsDeletedItem {
+			if updatedItem.DetailId <= 0 {
+				continue
 			}
+			if item, ok := existingByID[updatedItem.DetailId]; ok {
+				// reduce order qty from stock summary if SO is confirmed
+				if item.ProductId > 0 && existingOrder.CurrentStatus == SalesOrderStatusConfirmed {
+					product, err := GetProductOrVariant(ctx, string(item.ProductType), item.ProductId)
+					if err != nil {
+						tx.Rollback()
+						return nil, err
+					}
+					if product.GetInventoryAccountID() > 0 {
+						if err := UpdateStockSummaryOrderQty(tx, existingOrder.BusinessId, existingOrder.WarehouseId, item.ProductId, string(item.ProductType), item.BatchNumber, item.DetailQty.Neg(), existingOrder.OrderDate); err != nil {
+							tx.Rollback()
+							return nil, err
+						}
+					}
+				}
+			}
+			if err := tx.WithContext(ctx).
+				Where("id = ? AND sales_order_id = ?", updatedItem.DetailId, saleOrderId).
+				Delete(&SalesOrderDetail{}).Error; err != nil {
+				tx.Rollback()
+				return nil, err
+			}
+			continue
 		}
 
-		// If the item doesn't exist, add it to the purchase order
-		if existingItem == nil {
-			fmt.Println("is not existing- ")
+		// Create
+		if updatedItem.DetailId <= 0 {
 			newItem := SalesOrderDetail{
+				SalesOrderId:       saleOrderId, // CRITICAL: ensure parent exists before inserting child
 				ProductId:          updatedItem.ProductId,
 				ProductType:        updatedItem.ProductType,
 				BatchNumber:        updatedItem.BatchNumber,
@@ -518,70 +544,46 @@ func UpdateSalesOrder(ctx context.Context, saleOrderId int, updatedOrder *NewSal
 				DetailDiscountType: updatedItem.DetailDiscountType,
 				DetailAccountId:    updatedItem.DetailAccountId,
 			}
-
-			// Calculate tax and total amounts for the item
 			newItem.CalculateSaleItemDiscountAndTax(ctx, *updatedOrder.IsTaxInclusive)
-			orderSubtotal, totalDetailDiscountAmount, totalDetailTaxAmount, totalExclusiveTaxAmount = updateSaleItemDetailTotal(&newItem, *updatedOrder.IsTaxInclusive, orderSubtotal, totalExclusiveTaxAmount, totalDetailDiscountAmount, totalDetailTaxAmount)
-			existingOrder.Details = append(existingOrder.Details, newItem)
+			orderSubtotal, totalDetailDiscountAmount, totalDetailTaxAmount, totalExclusiveTaxAmount =
+				updateSaleItemDetailTotal(&newItem, *updatedOrder.IsTaxInclusive, orderSubtotal, totalExclusiveTaxAmount, totalDetailDiscountAmount, totalDetailTaxAmount)
 
-		} else {
-			if updatedItem.IsDeletedItem != nil && *updatedItem.IsDeletedItem {
-				// fmt.Println("Is deleted Item")
-				// if err := db.WithContext(ctx).Delete(&existingItem).Error; err != nil {
-				// 	return nil, err
-				// }
-				// Find the index of the item to delete
-				for i, item := range existingOrder.Details {
-					if item.ID == updatedItem.DetailId {
-						// reduced order qty from stock summary if po is confirmed
-						if item.ProductId > 0 && existingOrder.CurrentStatus == SalesOrderStatusConfirmed {
-							product, err := GetProductOrVariant(ctx, string(item.ProductType), item.ProductId)
-							if err != nil {
-								tx.Rollback()
-								return nil, err
-							}
-							if product.GetInventoryAccountID() > 0 {
-								if err := UpdateStockSummaryOrderQty(tx, existingOrder.BusinessId, existingOrder.WarehouseId, item.ProductId, string(item.ProductType), item.BatchNumber, item.DetailQty.Neg(), existingOrder.OrderDate); err != nil {
-									tx.Rollback()
-									return nil, err
-								}
-							}
-						}
-						// Delete the item from the database
-						if err := tx.WithContext(ctx).Delete(&existingOrder.Details[i]).Error; err != nil {
-							tx.Rollback()
-							return nil, err
-						}
-						// Remove the item from the slice
-						existingOrder.Details = append(existingOrder.Details[:i], existingOrder.Details[i+1:]...)
-						break // Exit the loop after deleting the item
-					}
-				}
-			} else {
-				// Update existing item details
-				existingItem.ProductId = updatedItem.ProductId
-				existingItem.ProductType = updatedItem.ProductType
-				existingItem.BatchNumber = updatedItem.BatchNumber
-				existingItem.Name = updatedItem.Name
-				existingItem.Description = updatedItem.Description
-				existingItem.DetailQty = updatedItem.DetailQty
-				existingItem.DetailUnitRate = updatedItem.DetailUnitRate
-				existingItem.DetailTaxId = updatedItem.DetailTaxId
-				existingItem.DetailTaxType = updatedItem.DetailTaxType
-				existingItem.DetailDiscount = updatedItem.DetailDiscount
-				existingItem.DetailDiscountType = updatedItem.DetailDiscountType
-				existingItem.DetailAccountId = updatedItem.DetailAccountId
-
-				// Calculate tax and total amounts for the item
-				existingItem.CalculateSaleItemDiscountAndTax(ctx, *updatedOrder.IsTaxInclusive)
-				orderSubtotal, totalDetailDiscountAmount, totalDetailTaxAmount, totalExclusiveTaxAmount = updateSaleItemDetailTotal(existingItem, *updatedOrder.IsTaxInclusive, orderSubtotal, totalExclusiveTaxAmount, totalDetailDiscountAmount, totalDetailTaxAmount)
-				// existingOrder.Details = append(existingOrder.Details, *existingItem)
-
-				if err := tx.WithContext(ctx).Save(&existingItem).Error; err != nil {
-					tx.Rollback()
-					return nil, err
-				}
+			if err := tx.WithContext(ctx).Create(&newItem).Error; err != nil {
+				tx.Rollback()
+				return nil, err
 			}
+			continue
+		}
+
+		// Update
+		item, ok := existingByID[updatedItem.DetailId]
+		if !ok {
+			// If client sent a DetailId that isn't in the order, fail fast (prevents FK chaos).
+			tx.Rollback()
+			return nil, errors.New("sales order detail not found")
+		}
+
+		item.ProductId = updatedItem.ProductId
+		item.ProductType = updatedItem.ProductType
+		item.BatchNumber = updatedItem.BatchNumber
+		item.Name = updatedItem.Name
+		item.Description = updatedItem.Description
+		item.DetailQty = updatedItem.DetailQty
+		item.DetailUnitRate = updatedItem.DetailUnitRate
+		item.DetailTaxId = updatedItem.DetailTaxId
+		item.DetailTaxType = updatedItem.DetailTaxType
+		item.DetailDiscount = updatedItem.DetailDiscount
+		item.DetailDiscountType = updatedItem.DetailDiscountType
+		item.DetailAccountId = updatedItem.DetailAccountId
+
+		item.CalculateSaleItemDiscountAndTax(ctx, *updatedOrder.IsTaxInclusive)
+		orderSubtotal, totalDetailDiscountAmount, totalDetailTaxAmount, totalExclusiveTaxAmount =
+			updateSaleItemDetailTotal(item, *updatedOrder.IsTaxInclusive, orderSubtotal, totalExclusiveTaxAmount, totalDetailDiscountAmount, totalDetailTaxAmount)
+
+		// CRITICAL: Save the actual struct pointer (not **SalesOrderDetail).
+		if err := tx.WithContext(ctx).Save(item).Error; err != nil {
+			tx.Rollback()
+			return nil, err
 		}
 	}
 
@@ -624,7 +626,8 @@ func UpdateSalesOrder(ctx context.Context, saleOrderId int, updatedOrder *NewSal
 	existingOrder.OrderTotalAmount = orderTotalAmount
 
 	// Save the updated purchase order to the database
-	if err := tx.WithContext(ctx).Save(&existingOrder).Error; err != nil {
+	// CRITICAL: existingOrder is already a pointer; do not pass **SalesOrder to GORM.
+	if err := tx.WithContext(ctx).Save(existingOrder).Error; err != nil {
 		tx.Rollback()
 		return nil, err
 	}
