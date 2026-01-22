@@ -165,13 +165,25 @@ REMOVE_ENV_VARS=(
 )
 REMOVE_ENV_VARS_CSV="$(IFS=, ; echo "${REMOVE_ENV_VARS[*]}")"
 
+# NOTE: Newer gcloud versions do NOT allow mixing env-var operations in `gcloud run deploy`
+# (it enforces "at most one of --set-env-vars/--remove-env-vars/...").
+# To keep deploy working, do the cleanup as a separate `services update` call first.
+if gcloud run services describe "$SERVICE_NAME" --region "$REGION" --format='value(metadata.name)' 1>/dev/null 2>&1; then
+  echo "Normalizing env var types on existing service ($SERVICE_NAME)..."
+  # Best-effort removal of vars that may have been set as secrets/literals previously.
+  # If a var doesn't exist, gcloud may error; ignore and continue.
+  gcloud run services update "$SERVICE_NAME" \
+    --region "$REGION" \
+    --remove-env-vars "$REMOVE_ENV_VARS_CSV" \
+    --quiet || true
+fi
+
 DEPLOY_ARGS=(
   run deploy "$SERVICE_NAME"
   --region "$REGION"
   --source .
   "$AUTH_FLAG"
   --add-cloudsql-instances "$CLOUDSQL_CONNECTION_NAME"
-  --remove-env-vars "$REMOVE_ENV_VARS_CSV"
   --set-env-vars "API_PORT_2=8080"
   --set-env-vars "DB_USER=$DB_USER"
   --set-env-vars "DB_PORT=$DB_PORT"
