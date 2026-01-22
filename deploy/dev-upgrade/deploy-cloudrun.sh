@@ -143,25 +143,11 @@ fi
 # CRITICAL: DB connection vars (DB_HOST, DB_PORT, DB_USER, DB_NAME_2) must be literals, not secrets.
 # If they're secret-typed on an existing service, remove them first so deploy can set them as literals.
 if [[ "$SERVICE_EXISTS" == "true" ]]; then
-  DB_VARS_TO_FORCE=()
-  python3 - <<'PY' <<<"${SERVICE_JSON}" | while IFS= read -r key; do
-import json,sys
-try:
-  data=json.load(sys.stdin)
-except Exception:
-  sys.exit(0)
-env=[]
-try:
-  env=data["spec"]["template"]["spec"]["containers"][0].get("env",[])
-except Exception:
-  env=[]
-for e in env:
-  name=e.get("name","")
-  if name in ("DB_HOST","DB_PORT","DB_USER","DB_NAME_2") and e.get("valueFrom"):
-    print(name)
-PY
-    [[ -n "$key" ]] && DB_VARS_TO_FORCE+=("$key")
-  done
+  # NOTE: don't use a pipeline+while here (it runs in a subshell and the array won't persist).
+  # Also don't use `python3 -` with a heredoc + here-string; use `-c` and feed JSON via stdin.
+  mapfile -t DB_VARS_TO_FORCE < <(
+    python3 -c $'import json,sys\ntry:\n  data=json.load(sys.stdin)\nexcept Exception:\n  sys.exit(0)\nenv=[]\ntry:\n  env=data[\"spec\"][\"template\"][\"spec\"][\"containers\"][0].get(\"env\",[])\nexcept Exception:\n  env=[]\nfor e in env:\n  name=e.get(\"name\",\"\")\n  if name in (\"DB_HOST\",\"DB_PORT\",\"DB_USER\",\"DB_NAME_2\") and e.get(\"valueFrom\"):\n    print(name)\n' <<<"${SERVICE_JSON}" 2>/dev/null
+  )
   
   if (( ${#DB_VARS_TO_FORCE[@]} > 0 )); then
     echo "Removing secret-typed DB vars before deploy: ${DB_VARS_TO_FORCE[*]}"
@@ -181,26 +167,7 @@ should_set_literal_env() {
   if [[ -z "${SERVICE_JSON}" ]]; then
     return 0
   fi
-  python3 - "$key" <<'PY' <<<"${SERVICE_JSON}" >/dev/null 2>&1
-import json,sys
-key=sys.argv[1]
-try:
-  data=json.load(sys.stdin)
-except Exception:
-  sys.exit(0)  # no service json -> allow set
-env=[]
-try:
-  env=data["spec"]["template"]["spec"]["containers"][0].get("env",[])
-except Exception:
-  env=[]
-for e in env:
-  if e.get("name")==key:
-    # secret typed if valueFrom is present
-    if e.get("valueFrom"):
-      sys.exit(1)
-    sys.exit(0)
-sys.exit(0)
-PY
+  python3 -c $'import json,sys\nkey=sys.argv[1]\ntry:\n  data=json.load(sys.stdin)\nexcept Exception:\n  sys.exit(0)\nenv=[]\ntry:\n  env=data[\"spec\"][\"template\"][\"spec\"][\"containers\"][0].get(\"env\",[])\nexcept Exception:\n  env=[]\nfor e in env:\n  if e.get(\"name\")==key:\n    if e.get(\"valueFrom\"):\n      sys.exit(1)\n    sys.exit(0)\nsys.exit(0)\n' "$key" <<<"${SERVICE_JSON}" >/dev/null 2>&1
 }
 
 ENV_VARS=()

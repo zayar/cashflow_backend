@@ -41,6 +41,19 @@ echo "Ensuring topics exist..."
 gcloud pubsub topics create "$TOPIC" --quiet || true
 gcloud pubsub topics create "$DLQ_TOPIC" --quiet || true
 
+# The worker service publishes messages to the topic via OutboxDispatcher.
+# Ensure the Cloud Run runtime service account has permission to publish.
+RUNTIME_SA_EMAIL="$(gcloud run services describe "$SERVICE_NAME" --region "$REGION" --format='value(spec.template.spec.serviceAccountName)' 2>/dev/null || true)"
+if [[ -n "$RUNTIME_SA_EMAIL" ]]; then
+  echo "Granting Pub/Sub publisher to Cloud Run runtime SA: $RUNTIME_SA_EMAIL"
+  gcloud pubsub topics add-iam-policy-binding "$TOPIC" \
+    --member "serviceAccount:$RUNTIME_SA_EMAIL" \
+    --role "roles/pubsub.publisher" \
+    --quiet || true
+else
+  echo "WARNING: Could not determine Cloud Run runtime service account for $SERVICE_NAME; skipping Pub/Sub publisher grant"
+fi
+
 echo "Ensuring push service account exists..."
 gcloud iam service-accounts create "$PUSH_SA_NAME" --display-name="Pub/Sub push to Cloud Run (dev-upgrade)" --quiet || true
 
