@@ -16,6 +16,7 @@ set -euo pipefail
 PROJECT_ID="${PROJECT_ID:-cashflow-483906}"
 REGION="${REGION:-asia-southeast1}"
 SERVICE_NAME="${SERVICE_NAME:-cashflow-backend-dev-upgrade}"
+SERVICE_ROLE="${SERVICE_ROLE:-}" # api|worker (recommended to set by deploy-cloudrun-both.sh)
 
 # Cloud SQL connection name: PROJECT:REGION:INSTANCE
 # Default instance name for this environment (override if needed).
@@ -68,6 +69,53 @@ STORAGE_ACCESS_BASE_URL="${STORAGE_ACCESS_BASE_URL:-}"
 GCS_SIGNER_EMAIL="${GCS_SIGNER_EMAIL:-}"
 GCS_SIGNER_PRIVATE_KEY="${GCS_SIGNER_PRIVATE_KEY:-}"
 
+if [[ -z "$SERVICE_ROLE" ]]; then
+  # Backward compatible guess (safe default: worker).
+  if [[ "$SERVICE_NAME" == "api-dev-upgrade-v2" ]]; then
+    SERVICE_ROLE="api"
+  else
+    SERVICE_ROLE="worker"
+  fi
+fi
+
+# Outbox controls (defaults depend on role)
+# - API: do NOT process journals; do NOT run background outbox loops; do not accept Pub/Sub pushes.
+# - Worker: process Pub/Sub pushes; (optionally) run outbox loops.
+OUTBOX_DIRECT_PROCESSING="${OUTBOX_DIRECT_PROCESSING:-}"
+ENABLE_PUBSUB_PUSH_ENDPOINT="${ENABLE_PUBSUB_PUSH_ENDPOINT:-}"
+OUTBOX_RUN_DISPATCHER="${OUTBOX_RUN_DISPATCHER:-}"
+OUTBOX_RUN_DIRECT_PROCESSOR="${OUTBOX_RUN_DIRECT_PROCESSOR:-}"
+
+if [[ -z "$OUTBOX_DIRECT_PROCESSING" ]]; then
+  if [[ "$SERVICE_ROLE" == "api" ]]; then
+    OUTBOX_DIRECT_PROCESSING="false"
+  else
+    # Keep legacy dev-upgrade behavior (direct processing safety net) unless explicitly overridden.
+    OUTBOX_DIRECT_PROCESSING="true"
+  fi
+fi
+if [[ -z "$ENABLE_PUBSUB_PUSH_ENDPOINT" ]]; then
+  if [[ "$SERVICE_ROLE" == "api" ]]; then
+    ENABLE_PUBSUB_PUSH_ENDPOINT="false"
+  else
+    ENABLE_PUBSUB_PUSH_ENDPOINT="true"
+  fi
+fi
+if [[ -z "$OUTBOX_RUN_DISPATCHER" ]]; then
+  if [[ "$SERVICE_ROLE" == "api" ]]; then
+    OUTBOX_RUN_DISPATCHER="false"
+  else
+    OUTBOX_RUN_DISPATCHER="true"
+  fi
+fi
+if [[ -z "$OUTBOX_RUN_DIRECT_PROCESSOR" ]]; then
+  if [[ "$SERVICE_ROLE" == "api" ]]; then
+    OUTBOX_RUN_DIRECT_PROCESSOR="false"
+  else
+    OUTBOX_RUN_DIRECT_PROCESSOR="true"
+  fi
+fi
+
 if [[ "$STORAGE_PROVIDER" == "gcs" && -z "$GCS_BUCKET" ]]; then
   echo "Missing GCS_BUCKET for STORAGE_PROVIDER=gcs"
   exit 1
@@ -95,7 +143,10 @@ DEPLOY_ARGS=(
   --set-env-vars "PUBSUB_PROJECT_ID=$PROJECT_ID"
   --set-env-vars "PUBSUB_TOPIC=$PUBSUB_TOPIC"
   --set-env-vars "PUBSUB_SUBSCRIPTION=$PUBSUB_SUBSCRIPTION"
-  --set-env-vars "OUTBOX_DIRECT_PROCESSING=true"
+  --set-env-vars "OUTBOX_DIRECT_PROCESSING=$OUTBOX_DIRECT_PROCESSING"
+  --set-env-vars "ENABLE_PUBSUB_PUSH_ENDPOINT=$ENABLE_PUBSUB_PUSH_ENDPOINT"
+  --set-env-vars "OUTBOX_RUN_DISPATCHER=$OUTBOX_RUN_DISPATCHER"
+  --set-env-vars "OUTBOX_RUN_DIRECT_PROCESSOR=$OUTBOX_RUN_DIRECT_PROCESSOR"
   --set-env-vars "STORAGE_PROVIDER=$STORAGE_PROVIDER"
   --set-env-vars "GCS_BUCKET=$GCS_BUCKET"
   --set-env-vars "GCS_URL=$GCS_URL"

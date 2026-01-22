@@ -26,11 +26,11 @@ WORKER_SERVICE_NAME="${WORKER_SERVICE_NAME:-cashflow-backend-dev-upgrade}"
 cd "$REPO_ROOT"
 
 echo "Deploying API service: $API_SERVICE_NAME"
-SERVICE_NAME="$API_SERVICE_NAME" ./deploy/dev-upgrade/deploy-cloudrun.sh
+SERVICE_NAME="$API_SERVICE_NAME" SERVICE_ROLE="api" ./deploy/dev-upgrade/deploy-cloudrun.sh
 
 echo
 echo "Deploying WORKER service: $WORKER_SERVICE_NAME"
-SERVICE_NAME="$WORKER_SERVICE_NAME" ./deploy/dev-upgrade/deploy-cloudrun.sh
+SERVICE_NAME="$WORKER_SERVICE_NAME" SERVICE_ROLE="worker" ./deploy/dev-upgrade/deploy-cloudrun.sh
 
 echo
 echo "Wiring Pub/Sub push subscription to WORKER /pubsub endpoint..."
