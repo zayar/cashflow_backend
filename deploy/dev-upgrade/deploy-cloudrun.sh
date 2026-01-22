@@ -133,12 +133,45 @@ if [[ "$SERVICE_ROLE" == "api" ]]; then
   AUTH_FLAG="--allow-unauthenticated"
 fi
 
+# If the service already exists, some variables may have been set as a different "type"
+# (e.g. from Console UI: Secret vs literal). Cloud Run forbids changing env var type in-place.
+# To make deploy idempotent, remove the vars we manage, then set them again.
+#
+# Example error we avoid:
+#   Cannot update environment variable [DB_USER] to string literal because it has already been set with a different type.
+REMOVE_ENV_VARS=(
+  API_PORT_2
+  DB_USER
+  DB_PORT
+  DB_HOST
+  DB_NAME_2
+  DB_PASSWORD
+  REDIS_ADDRESS
+  TOKEN_HOUR_LIFESPAN
+  GO_ENV
+  PUBSUB_PROJECT_ID
+  PUBSUB_TOPIC
+  PUBSUB_SUBSCRIPTION
+  OUTBOX_DIRECT_PROCESSING
+  ENABLE_PUBSUB_PUSH_ENDPOINT
+  OUTBOX_RUN_DISPATCHER
+  OUTBOX_RUN_DIRECT_PROCESSOR
+  STORAGE_PROVIDER
+  GCS_BUCKET
+  GCS_URL
+  STORAGE_ACCESS_BASE_URL
+  GCS_SIGNER_EMAIL
+  GCS_SIGNER_PRIVATE_KEY
+)
+REMOVE_ENV_VARS_CSV="$(IFS=, ; echo "${REMOVE_ENV_VARS[*]}")"
+
 DEPLOY_ARGS=(
   run deploy "$SERVICE_NAME"
   --region "$REGION"
   --source .
   "$AUTH_FLAG"
   --add-cloudsql-instances "$CLOUDSQL_CONNECTION_NAME"
+  --remove-env-vars "$REMOVE_ENV_VARS_CSV"
   --set-env-vars "API_PORT_2=8080"
   --set-env-vars "DB_USER=$DB_USER"
   --set-env-vars "DB_PORT=$DB_PORT"
