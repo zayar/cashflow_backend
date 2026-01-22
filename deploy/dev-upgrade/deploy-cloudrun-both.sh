@@ -15,13 +15,13 @@ set -euo pipefail
 #   ./deploy/dev-upgrade/deploy-cloudrun-both.sh
 #
 # Optional overrides:
-#   API_SERVICE_NAME=api-dev-upgrade-v2 WORKER_SERVICE_NAME=cashflow-backend-dev-upgrade ./deploy/dev-upgrade/deploy-cloudrun-both.sh
+#   API_SERVICE_NAME=api-dev-upgrade-v2 WORKER_SERVICE_NAME=worker-dev-upgrade ./deploy/dev-upgrade/deploy-cloudrun-both.sh
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 API_SERVICE_NAME="${API_SERVICE_NAME:-api-dev-upgrade-v2}"
-WORKER_SERVICE_NAME="${WORKER_SERVICE_NAME:-cashflow-backend-dev-upgrade}"
+WORKER_SERVICE_NAME="${WORKER_SERVICE_NAME:-worker-dev-upgrade}"
 
 cd "$REPO_ROOT"
 

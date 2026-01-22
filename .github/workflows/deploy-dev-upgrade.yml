@@ -19,6 +19,11 @@ jobs:
     env:
       PROJECT_ID: cashflow-483906
       REGION: asia-southeast1
+      # IMPORTANT:
+      # - Deploy API to api-dev-upgrade-v2
+      # - Deploy worker to worker-dev-upgrade (avoid re-creating cashflow-backend-dev-upgrade)
+      API_SERVICE_NAME: api-dev-upgrade-v2
+      WORKER_SERVICE_NAME: worker-dev-upgrade
       # Required by deploy-cloudrun.sh
       REDIS_ADDRESS: ${{ secrets.REDIS_ADDRESS }}
       # Optional: only needed if REDIS_ADDRESS is private IP (10.x/172.16-31/192.168)
@@ -28,8 +33,10 @@ jobs:
       GCS_URL: ${{ vars.GCS_URL }}
       STORAGE_ACCESS_BASE_URL: ${{ vars.STORAGE_ACCESS_BASE_URL }}
       # Optional overrides (defaults in script are fine)
-      # API_SERVICE_NAME: api-dev-upgrade-v2
-      # WORKER_SERVICE_NAME: cashflow-backend-dev-upgrade
+      # CLOUDSQL_INSTANCE: cashflow-mysql-dev-upgrade
+      # DB_NAME_2: pitibooks
+      # PUBSUB_TOPIC: CashflowAccountingDevUpgrade
+      # PUBSUB_SUBSCRIPTION: CashflowAccountingDevUpgradeSub
       # CLOUDSQL_INSTANCE: cashflow-mysql-dev-upgrade
       # DB_NAME_2: pitibooks
       # PUBSUB_TOPIC: CashflowAccountingDevUpgrade

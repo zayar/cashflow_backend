@@ -126,11 +126,18 @@ echo "Deploying $SERVICE_NAME to Cloud Run ($PROJECT_ID / $REGION)"
 # Ensure we're deploying to the expected project.
 gcloud config set project "$PROJECT_ID" 1>/dev/null
 
+AUTH_FLAG="--no-allow-unauthenticated"
+if [[ "$SERVICE_ROLE" == "api" ]]; then
+  # API must be reachable by browser/Firebase rewrites.
+  # Auth is enforced at the app layer (session middleware), so Cloud Run can be public.
+  AUTH_FLAG="--allow-unauthenticated"
+fi
+
 DEPLOY_ARGS=(
   run deploy "$SERVICE_NAME"
   --region "$REGION"
   --source .
-  --no-allow-unauthenticated
+  "$AUTH_FLAG"
   --add-cloudsql-instances "$CLOUDSQL_CONNECTION_NAME"
   --set-env-vars "API_PORT_2=8080"
   --set-env-vars "DB_USER=$DB_USER"
