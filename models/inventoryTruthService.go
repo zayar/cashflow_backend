@@ -3,6 +3,7 @@ package models
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mmdatafocus/books_backend/config"
@@ -64,7 +65,10 @@ func computeLedgerSnapshots(ctx context.Context, asOf time.Time, warehouseId *in
 		where += " AND product_type = @productType"
 		args["productType"] = *productType
 	}
-	if batchNumber != nil {
+	// IMPORTANT: empty batch means "fungible across batches".
+	// If the caller passes batchNumber="" (common for invoices), we must NOT filter by batch,
+	// otherwise stock that exists under real batches (or NULL) will appear as 0 and block posting.
+	if batchNumber != nil && strings.TrimSpace(*batchNumber) != "" {
 		where += " AND COALESCE(batch_number, '') = @batchNumber"
 		args["batchNumber"] = *batchNumber
 	}

@@ -347,7 +347,12 @@ func CreateSalesInvoice(ctx context.Context, input *NewSalesInvoice) (*SalesInvo
 	//
 	// This prevents: invoice created successfully but posting fails later (no invoice journal),
 	// typically when transfer orders updated stock_summaries but their accounting workflow failed.
-	reservedByKey := make(map[string]decimal.Decimal)
+	// Reservation tracking within this invoice request so multiple lines can't over-consume the same stock.
+	//
+	// - For batch-specific lines, reserve per-batch (strict).
+	// - For empty-batch lines, treat batches as fungible and reserve globally across all batches.
+	reservedGlobal := make(map[string]decimal.Decimal)  // key: product_id-product_type
+	reservedByBatch := make(map[string]decimal.Decimal) // key: product_id-product_type-batch
 	for _, item := range input.Details {
 		invoiceItem := SalesInvoiceDetail{
 			ProductId:          item.ProductId,
@@ -374,13 +379,21 @@ func CreateSalesInvoice(ctx context.Context, input *NewSalesInvoice) (*SalesInvo
 				return nil, err
 			}
 			if product.GetInventoryAccountID() > 0 {
-				key := fmt.Sprintf("%d-%s-%s", item.ProductId, string(item.ProductType), item.BatchNumber)
-				already := reservedByKey[key]
+				globalKey := fmt.Sprintf("%d-%s", item.ProductId, string(item.ProductType))
+				batchTrim := strings.TrimSpace(item.BatchNumber)
+				batchKey := fmt.Sprintf("%d-%s-%s", item.ProductId, string(item.ProductType), batchTrim)
 				asOf := MyDateString(input.InvoiceDate)
 				pid := item.ProductId
 				pt := item.ProductType
-				batch := item.BatchNumber
-				rows, err := InventorySnapshotByProductWarehouse(ctx, asOf, &input.WarehouseId, &pid, &pt, &batch)
+				var batchPtr *string
+				if batchTrim != "" {
+					// Strict batch: only count this batch.
+					batchPtr = &batchTrim
+				} else {
+					// Empty batch: fungible across batches => snapshot must NOT filter by batch.
+					batchPtr = nil
+				}
+				rows, err := InventorySnapshotByProductWarehouse(ctx, asOf, &input.WarehouseId, &pid, &pt, batchPtr)
 				if err != nil {
 					tx.Rollback()
 					return nil, err
@@ -389,12 +402,26 @@ func CreateSalesInvoice(ctx context.Context, input *NewSalesInvoice) (*SalesInvo
 				for _, r := range rows {
 					onHand = onHand.Add(r.StockOnHand)
 				}
-				available := onHand.Sub(already)
-				if available.LessThan(item.DetailQty) {
-					tx.Rollback()
-					return nil, fmt.Errorf("insufficient stock on hand for %s (available=%s, invoice_qty=%s)", strings.TrimSpace(item.Name), available.String(), item.DetailQty.String())
+				var available decimal.Decimal
+				if batchTrim == "" {
+					already := reservedGlobal[globalKey]
+					available = onHand.Sub(already)
+					if available.LessThan(item.DetailQty) {
+						tx.Rollback()
+						return nil, fmt.Errorf("insufficient stock on hand for %s (available=%s, invoice_qty=%s)", strings.TrimSpace(item.Name), available.String(), item.DetailQty.String())
+					}
+					reservedGlobal[globalKey] = already.Add(item.DetailQty)
+				} else {
+					alreadyBatch := reservedByBatch[batchKey]
+					available = onHand.Sub(alreadyBatch)
+					if available.LessThan(item.DetailQty) {
+						tx.Rollback()
+						return nil, fmt.Errorf("insufficient stock on hand for %s (available=%s, invoice_qty=%s)", strings.TrimSpace(item.Name), available.String(), item.DetailQty.String())
+					}
+					reservedByBatch[batchKey] = alreadyBatch.Add(item.DetailQty)
+					// Also reserve globally so empty-batch lines can't over-consume after batch-specific lines.
+					reservedGlobal[globalKey] = reservedGlobal[globalKey].Add(item.DetailQty)
 				}
-				reservedByKey[key] = already.Add(item.DetailQty)
 			}
 		} else {
 			// Fallback for other product types / legacy behavior.
