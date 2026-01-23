@@ -399,6 +399,28 @@ func GetWarehouseInventoryByProduct(ctx context.Context, productId int, toDate *
 	}
 
 	db := config.GetDB()
+	// IMPORTANT:
+	// product_id is not globally unique between `products` and `product_variants` tables.
+	// If we don't pin the product_type, a request for productId=1 might accidentally pick the
+	// variant with id=1 (or vice versa), which makes Product Details show incorrect on-hand per warehouse.
+	productType := "S"
+	{
+		var exists int
+		_ = db.WithContext(ctx).
+			Raw("SELECT 1 FROM products WHERE business_id = ? AND id = ? LIMIT 1", businessId, productId).
+			Scan(&exists).Error
+		if exists != 1 {
+			exists = 0
+			_ = db.WithContext(ctx).
+				Raw("SELECT 1 FROM product_variants WHERE business_id = ? AND id = ? LIMIT 1", businessId, productId).
+				Scan(&exists).Error
+			if exists != 1 {
+				return nil, errors.New("product not found")
+			}
+			productType = "V"
+		}
+	}
+
 	sql := `
 WITH Ledger AS (
     SELECT
@@ -419,6 +441,7 @@ WITH Ledger AS (
       AND sh.is_reversal = 0
       AND sh.reversed_by_stock_history_id IS NULL
       AND sh.product_id = @productId
+      AND sh.product_type = @productType
     GROUP BY sh.warehouse_id, sh.product_id, sh.product_type
 ),
 AllProducts AS (
@@ -459,6 +482,7 @@ LEFT JOIN AllProducts ap ON Ledger.product_id = ap.product_id AND Ledger.product
 		"businessId": businessId,
 		"toDate":     asOf,
 		"productId":  productId,
+		"productType": productType,
 	}).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
