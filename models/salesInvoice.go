@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mmdatafocus/books_backend/config"
 	"github.com/mmdatafocus/books_backend/utils"
 	"github.com/shopspring/decimal"
@@ -342,15 +343,15 @@ func CreateSalesInvoice(ctx context.Context, input *NewSalesInvoice) (*SalesInvo
 		totalDetailTaxAmount decimal.Decimal
 
 	var productIds, variantIds, taxIds, taxGroupIds, accountIds []int
-	// Guardrail: validate stock against ledger-of-record (stock_histories) so we don't allow creating
-	// an invoice from "summary stock" that isn't actually present in FIFO layers.
+	// Option A UX:
+	// - Draft invoices are ALWAYS allowed (even if inventory is insufficient) because they have no
+	//   accounting impact and do not create stock ledger/journal postings.
+	// - Confirmed invoices MUST pass stock validation; otherwise return an error so the UI can show a
+	//   notification and prevent creating a "real" sale invoice.
 	//
-	// This prevents: invoice created successfully but posting fails later (no invoice journal),
-	// typically when transfer orders updated stock_summaries but their accounting workflow failed.
-	// Reservation tracking within this invoice request so multiple lines can't over-consume the same stock.
-	//
-	// - For batch-specific lines, reserve per-batch (strict).
-	// - For empty-batch lines, treat batches as fungible and reserve globally across all batches.
+	// We only validate stock when the caller requests Confirmed.
+	validateStockOnCreate := requestedStatus == SalesInvoiceStatusConfirmed
+	// Reservation tracking within this request (only used when validateStockOnCreate=true).
 	reservedGlobal := make(map[string]decimal.Decimal)  // key: product_id-product_type
 	reservedByBatch := make(map[string]decimal.Decimal) // key: product_id-product_type-batch
 	for _, item := range input.Details {
@@ -372,7 +373,7 @@ func CreateSalesInvoice(ctx context.Context, input *NewSalesInvoice) (*SalesInvo
 
 		// Keep legacy behavior: if this line is for a non-inventory item, skip stock checks.
 		// For inventory-tracked items, validate using ledger snapshots as-of invoice date.
-		if item.ProductId > 0 && (item.ProductType == ProductTypeSingle || item.ProductType == ProductTypeVariant) {
+		if validateStockOnCreate && item.ProductId > 0 && (item.ProductType == ProductTypeSingle || item.ProductType == ProductTypeVariant) {
 			product, err := GetProductOrVariant(ctx, string(item.ProductType), item.ProductId)
 			if err != nil {
 				tx.Rollback()
@@ -423,7 +424,7 @@ func CreateSalesInvoice(ctx context.Context, input *NewSalesInvoice) (*SalesInvo
 					reservedGlobal[globalKey] = reservedGlobal[globalKey].Add(item.DetailQty)
 				}
 			}
-		} else {
+		} else if validateStockOnCreate {
 			// Fallback for other product types / legacy behavior.
 			if err := ValidateProductStock(tx, ctx, businessId, input.WarehouseId, item.BatchNumber, item.ProductType, item.ProductId, item.DetailQty); err != nil {
 				tx.Rollback()
@@ -559,18 +560,26 @@ func CreateSalesInvoice(ctx context.Context, input *NewSalesInvoice) (*SalesInvo
 		RemainingBalance:              invoiceTotalAmount,
 	}
 
-	seqNo, err := utils.GetSequence[SalesInvoice](ctx, businessId)
-	if err != nil {
-		tx.Rollback()
-		return nil, err
+	// Invoice numbering (Option A UX):
+	// - Only assign a "real" invoice number (IV-xxx) when Confirmed is requested.
+	// - Draft invoices get a non-sale placeholder to avoid mixing with real sale invoices.
+	if requestedStatus == SalesInvoiceStatusConfirmed {
+		seqNo, err := utils.GetSequence[SalesInvoice](ctx, businessId)
+		if err != nil {
+			tx.Rollback()
+			return nil, err
+		}
+		prefix, err := getTransactionPrefix(ctx, input.BranchId, "Invoice")
+		if err != nil {
+			tx.Rollback()
+			return nil, err
+		}
+		saleInvoice.SequenceNo = decimal.NewFromInt(seqNo)
+		saleInvoice.InvoiceNumber = prefix + fmt.Sprint(seqNo)
+	} else {
+		saleInvoice.SequenceNo = decimal.NewFromInt(0)
+		saleInvoice.InvoiceNumber = "DRAFT-" + uuid.NewString()
 	}
-	prefix, err := getTransactionPrefix(ctx, input.BranchId, "Invoice")
-	if err != nil {
-		tx.Rollback()
-		return nil, err
-	}
-	saleInvoice.SequenceNo = decimal.NewFromInt(seqNo)
-	saleInvoice.InvoiceNumber = prefix + fmt.Sprint(seqNo)
 
 	err = tx.WithContext(ctx).Create(&saleInvoice).Error
 	if err != nil {
@@ -664,6 +673,23 @@ func UpdateSalesInvoice(ctx context.Context, invoiceId int, updatedInvoice *NewS
 		return nil, errors.New("invalid status")
 	}
 
+	// Option A UX:
+	// Only assign a "real" invoice number when confirming Draft -> Confirmed.
+	if oldStatus == SalesInvoiceStatusDraft && updatedInvoice.CurrentStatus == SalesInvoiceStatusConfirmed {
+		if existingInvoice.SequenceNo.IsZero() || strings.HasPrefix(strings.TrimSpace(existingInvoice.InvoiceNumber), "DRAFT-") {
+			seqNo, err := utils.GetSequence[SalesInvoice](ctx, businessId)
+			if err != nil {
+				return nil, err
+			}
+			prefix, err := getTransactionPrefix(ctx, updatedInvoice.BranchId, "Invoice")
+			if err != nil {
+				return nil, err
+			}
+			existingInvoice.SequenceNo = decimal.NewFromInt(seqNo)
+			existingInvoice.InvoiceNumber = prefix + fmt.Sprint(seqNo)
+		}
+	}
+
 	var oldInvoiceDate *time.Time
 	// nil if invoice dates are the same, old invoice date if not
 	if !existingInvoice.InvoiceDate.Equal(updatedInvoice.InvoiceDate) {
@@ -743,10 +769,13 @@ func UpdateSalesInvoice(ctx context.Context, invoiceId int, updatedInvoice *NewS
 				SalesOrderItemId:   updatedItem.SalesOrderItemId,
 			}
 
-			// check if to-be-added product has enough stock
-			if err := ValidateProductStock(tx, ctx, businessId, updatedInvoice.WarehouseId, updatedItem.BatchNumber, updatedItem.ProductType, updatedItem.ProductId, updatedItem.DetailQty); err != nil {
-				tx.Rollback()
-				return nil, err
+			// Option A UX: allow Draft edits without stock validation.
+			// Only validate stock when the invoice is being Confirmed.
+			if updatedInvoice.CurrentStatus == SalesInvoiceStatusConfirmed {
+				if err := ValidateProductStock(tx, ctx, businessId, updatedInvoice.WarehouseId, updatedItem.BatchNumber, updatedItem.ProductType, updatedItem.ProductId, updatedItem.DetailQty); err != nil {
+					tx.Rollback()
+					return nil, err
+				}
 			}
 			// if updatedItem.ProductType != ProductTypeInput {
 			// 	currentStock, err := GetProductStock(ctx, businessId, updatedItem.ProductType, updatedItem.ProductId)
@@ -1241,9 +1270,92 @@ func UpdateStatusSalesInvoice(ctx context.Context, id int, status string) (*Sale
 	db := config.GetDB()
 	tx := db.Begin()
 
-	err = tx.WithContext(ctx).Model(&saleInvoice).Updates(map[string]interface{}{
+	updates := map[string]interface{}{
 		"CurrentStatus": status,
-	}).Error
+	}
+
+	// Option A UX:
+	// - Block Confirm if stock is insufficient (show UI notification; do not create a "real" invoice).
+	// - Assign a real invoice number only when confirming Draft -> Confirmed.
+	if oldStatus == SalesInvoiceStatusDraft && status == string(SalesInvoiceStatusConfirmed) {
+		// Validate stock on hand from ledger-of-record as-of invoice date.
+		// Reservation tracking within this request so multiple lines can't over-consume.
+		reservedGlobal := make(map[string]decimal.Decimal)  // key: product_id-product_type
+		reservedByBatch := make(map[string]decimal.Decimal) // key: product_id-product_type-batch
+		for _, d := range saleInvoice.Details {
+			if d.ProductId <= 0 || (d.ProductType != ProductTypeSingle && d.ProductType != ProductTypeVariant) {
+				continue
+			}
+			product, err := GetProductOrVariant(ctx, string(d.ProductType), d.ProductId)
+			if err != nil {
+				tx.Rollback()
+				return nil, err
+			}
+			if product.GetInventoryAccountID() <= 0 {
+				continue
+			}
+
+			globalKey := fmt.Sprintf("%d-%s", d.ProductId, string(d.ProductType))
+			batchTrim := strings.TrimSpace(d.BatchNumber)
+			batchKey := fmt.Sprintf("%d-%s-%s", d.ProductId, string(d.ProductType), batchTrim)
+			asOf := MyDateString(saleInvoice.InvoiceDate)
+			pid := d.ProductId
+			pt := d.ProductType
+			var batchPtr *string
+			if batchTrim != "" {
+				batchPtr = &batchTrim
+			} else {
+				batchPtr = nil // empty batch => fungible across batches
+			}
+			rows, err := InventorySnapshotByProductWarehouse(ctx, asOf, &saleInvoice.WarehouseId, &pid, &pt, batchPtr)
+			if err != nil {
+				tx.Rollback()
+				return nil, err
+			}
+			onHand := decimal.Zero
+			for _, r := range rows {
+				onHand = onHand.Add(r.StockOnHand)
+			}
+			if batchTrim == "" {
+				already := reservedGlobal[globalKey]
+				available := onHand.Sub(already)
+				if available.LessThan(d.DetailQty) {
+					tx.Rollback()
+					return nil, fmt.Errorf("insufficient stock on hand for %s (available=%s, invoice_qty=%s)", strings.TrimSpace(d.Name), available.String(), d.DetailQty.String())
+				}
+				reservedGlobal[globalKey] = already.Add(d.DetailQty)
+			} else {
+				alreadyBatch := reservedByBatch[batchKey]
+				available := onHand.Sub(alreadyBatch)
+				if available.LessThan(d.DetailQty) {
+					tx.Rollback()
+					return nil, fmt.Errorf("insufficient stock on hand for %s (available=%s, invoice_qty=%s)", strings.TrimSpace(d.Name), available.String(), d.DetailQty.String())
+				}
+				reservedByBatch[batchKey] = alreadyBatch.Add(d.DetailQty)
+				reservedGlobal[globalKey] = reservedGlobal[globalKey].Add(d.DetailQty)
+			}
+		}
+
+		// Assign real invoice number.
+		if saleInvoice.SequenceNo.IsZero() || strings.HasPrefix(strings.TrimSpace(saleInvoice.InvoiceNumber), "DRAFT-") {
+			seqNo, err := utils.GetSequence[SalesInvoice](ctx, businessId)
+			if err != nil {
+				tx.Rollback()
+				return nil, err
+			}
+			prefix, err := getTransactionPrefix(ctx, saleInvoice.BranchId, "Invoice")
+			if err != nil {
+				tx.Rollback()
+				return nil, err
+			}
+			saleInvoice.SequenceNo = decimal.NewFromInt(seqNo)
+			saleInvoice.InvoiceNumber = prefix + fmt.Sprint(seqNo)
+			updates["SequenceNo"] = saleInvoice.SequenceNo
+			updates["InvoiceNumber"] = saleInvoice.InvoiceNumber
+		}
+	}
+
+	err = tx.WithContext(ctx).Model(&saleInvoice).Updates(updates).Error
 
 	if err != nil {
 		tx.Rollback()
