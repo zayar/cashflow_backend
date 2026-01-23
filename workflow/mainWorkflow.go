@@ -496,7 +496,9 @@ func getGlobalOutgoingQtyBeforeDate(tx *gorm.DB, businessId string, warehouseId 
 		  AND warehouse_id = ?
 		  AND product_id = ?
 		  AND product_type = ?
-		  AND is_outgoing = 1
+		  -- Use qty sign, not is_outgoing, because some out-movements (e.g. IVAQ qty<0)
+		  -- are not always flagged with is_outgoing=true but still consume inventory.
+		  AND qty < 0
 		  AND stock_date < ?
 		  AND is_reversal = 0
 		  AND reversed_by_stock_history_id IS NULL
@@ -515,7 +517,9 @@ func getRemainingIncomingStockHistoriesFungible(tx *gorm.DB, businessId string, 
 		  AND warehouse_id = ?
 		  AND product_id = ?
 		  AND product_type = ?
-		  AND is_outgoing = 0
+		  -- Only positive qty rows form FIFO layers.
+		  -- Negative qty rows (even if is_outgoing=false) are consumptions and must not be treated as layers.
+		  AND qty > 0
 		  AND is_reversal = 0
 		  AND reversed_by_stock_history_id IS NULL
 		ORDER BY stock_date, is_outgoing, id ASC;
