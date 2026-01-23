@@ -284,6 +284,30 @@ func updateInvoiceItemDetailTotal(item *SalesInvoiceDetail, isTaxInclusive bool,
 	return orderSubtotal, totalDetailDiscountAmount, totalDetailTaxAmount, totalExclusiveTaxAmount
 }
 
+// stockSummaryOnHand is a "fast path" that reads current on-hand from stock_summaries (UI stock source).
+// We use it only to improve error messages when ledger-of-record (stock_histories) is still catching up
+// after a transfer/bill/adjustment has been confirmed.
+func stockSummaryOnHand(tx *gorm.DB, businessId string, warehouseId int, productId int, productType ProductType, batchTrim string) (decimal.Decimal, error) {
+	if tx == nil {
+		return decimal.Zero, errors.New("tx is nil")
+	}
+	var onHand decimal.Decimal
+	if strings.TrimSpace(batchTrim) == "" {
+		err := tx.Raw(`
+			SELECT COALESCE(SUM(current_qty), 0) AS on_hand
+			FROM stock_summaries
+			WHERE business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ?
+		`, businessId, warehouseId, productId, productType).Scan(&onHand).Error
+		return onHand, err
+	}
+	err := tx.Raw(`
+		SELECT COALESCE(SUM(current_qty), 0) AS on_hand
+		FROM stock_summaries
+		WHERE business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ?
+	`, businessId, warehouseId, productId, productType, batchTrim).Scan(&onHand).Error
+	return onHand, err
+}
+
 func CreateSalesInvoice(ctx context.Context, input *NewSalesInvoice) (*SalesInvoice, error) {
 	db := config.GetDB()
 
@@ -408,17 +432,65 @@ func CreateSalesInvoice(ctx context.Context, input *NewSalesInvoice) (*SalesInvo
 					already := reservedGlobal[globalKey]
 					available = onHand.Sub(already)
 					if available.LessThan(item.DetailQty) {
+						// If summaries show sufficient stock but ledger does not, it usually means a recent
+						// transfer/bill/adjustment is still being posted by the background worker.
+						if summaryOnHand, err := stockSummaryOnHand(tx.WithContext(ctx), businessId, input.WarehouseId, item.ProductId, item.ProductType, batchTrim); err == nil {
+							summaryAvailable := summaryOnHand.Sub(already)
+							if !summaryAvailable.IsNegative() && summaryAvailable.GreaterThanOrEqual(item.DetailQty) {
+								// Small race-condition smoother: re-check the ledger once.
+								time.Sleep(300 * time.Millisecond)
+								rows2, err := InventorySnapshotByProductWarehouse(ctx, asOf, &input.WarehouseId, &pid, &pt, batchPtr)
+								if err == nil {
+									onHand2 := decimal.Zero
+									for _, r := range rows2 {
+										onHand2 = onHand2.Add(r.StockOnHand)
+									}
+									available2 := onHand2.Sub(already)
+									if available2.GreaterThanOrEqual(item.DetailQty) {
+										// Ledger caught up; continue normally.
+										onHand = onHand2
+										available = available2
+										goto ledgerOKCreate
+									}
+								}
+								tx.Rollback()
+								return nil, fmt.Errorf("stock is still being posted for %s. Please wait a moment and try again", strings.TrimSpace(item.Name))
+							}
+						}
 						tx.Rollback()
 						return nil, fmt.Errorf("insufficient stock on hand for %s (available=%s, invoice_qty=%s)", strings.TrimSpace(item.Name), available.String(), item.DetailQty.String())
 					}
+				ledgerOKCreate:
 					reservedGlobal[globalKey] = already.Add(item.DetailQty)
 				} else {
 					alreadyBatch := reservedByBatch[batchKey]
 					available = onHand.Sub(alreadyBatch)
 					if available.LessThan(item.DetailQty) {
+						if summaryOnHand, err := stockSummaryOnHand(tx.WithContext(ctx), businessId, input.WarehouseId, item.ProductId, item.ProductType, batchTrim); err == nil {
+							summaryAvailable := summaryOnHand.Sub(alreadyBatch)
+							if !summaryAvailable.IsNegative() && summaryAvailable.GreaterThanOrEqual(item.DetailQty) {
+								time.Sleep(300 * time.Millisecond)
+								rows2, err := InventorySnapshotByProductWarehouse(ctx, asOf, &input.WarehouseId, &pid, &pt, batchPtr)
+								if err == nil {
+									onHand2 := decimal.Zero
+									for _, r := range rows2 {
+										onHand2 = onHand2.Add(r.StockOnHand)
+									}
+									available2 := onHand2.Sub(alreadyBatch)
+									if available2.GreaterThanOrEqual(item.DetailQty) {
+										onHand = onHand2
+										available = available2
+										goto ledgerOKCreateBatch
+									}
+								}
+								tx.Rollback()
+								return nil, fmt.Errorf("stock is still being posted for %s. Please wait a moment and try again", strings.TrimSpace(item.Name))
+							}
+						}
 						tx.Rollback()
 						return nil, fmt.Errorf("insufficient stock on hand for %s (available=%s, invoice_qty=%s)", strings.TrimSpace(item.Name), available.String(), item.DetailQty.String())
 					}
+				ledgerOKCreateBatch:
 					reservedByBatch[batchKey] = alreadyBatch.Add(item.DetailQty)
 					// Also reserve globally so empty-batch lines can't over-consume after batch-specific lines.
 					reservedGlobal[globalKey] = reservedGlobal[globalKey].Add(item.DetailQty)
@@ -1320,17 +1392,61 @@ func UpdateStatusSalesInvoice(ctx context.Context, id int, status string) (*Sale
 				already := reservedGlobal[globalKey]
 				available := onHand.Sub(already)
 				if available.LessThan(d.DetailQty) {
+					if summaryOnHand, err := stockSummaryOnHand(tx.WithContext(ctx), businessId, saleInvoice.WarehouseId, d.ProductId, d.ProductType, batchTrim); err == nil {
+						summaryAvailable := summaryOnHand.Sub(already)
+						if !summaryAvailable.IsNegative() && summaryAvailable.GreaterThanOrEqual(d.DetailQty) {
+							time.Sleep(300 * time.Millisecond)
+							rows2, err := InventorySnapshotByProductWarehouse(ctx, asOf, &saleInvoice.WarehouseId, &pid, &pt, batchPtr)
+							if err == nil {
+								onHand2 := decimal.Zero
+								for _, r := range rows2 {
+									onHand2 = onHand2.Add(r.StockOnHand)
+								}
+								available2 := onHand2.Sub(already)
+								if available2.GreaterThanOrEqual(d.DetailQty) {
+									onHand = onHand2
+									available = available2
+									goto ledgerOKConfirm
+								}
+							}
+							tx.Rollback()
+							return nil, fmt.Errorf("stock is still being posted for %s. Please wait a moment and try again", strings.TrimSpace(d.Name))
+						}
+					}
 					tx.Rollback()
 					return nil, fmt.Errorf("insufficient stock on hand for %s (available=%s, invoice_qty=%s)", strings.TrimSpace(d.Name), available.String(), d.DetailQty.String())
 				}
+			ledgerOKConfirm:
 				reservedGlobal[globalKey] = already.Add(d.DetailQty)
 			} else {
 				alreadyBatch := reservedByBatch[batchKey]
 				available := onHand.Sub(alreadyBatch)
 				if available.LessThan(d.DetailQty) {
+					if summaryOnHand, err := stockSummaryOnHand(tx.WithContext(ctx), businessId, saleInvoice.WarehouseId, d.ProductId, d.ProductType, batchTrim); err == nil {
+						summaryAvailable := summaryOnHand.Sub(alreadyBatch)
+						if !summaryAvailable.IsNegative() && summaryAvailable.GreaterThanOrEqual(d.DetailQty) {
+							time.Sleep(300 * time.Millisecond)
+							rows2, err := InventorySnapshotByProductWarehouse(ctx, asOf, &saleInvoice.WarehouseId, &pid, &pt, batchPtr)
+							if err == nil {
+								onHand2 := decimal.Zero
+								for _, r := range rows2 {
+									onHand2 = onHand2.Add(r.StockOnHand)
+								}
+								available2 := onHand2.Sub(alreadyBatch)
+								if available2.GreaterThanOrEqual(d.DetailQty) {
+									onHand = onHand2
+									available = available2
+									goto ledgerOKConfirmBatch
+								}
+							}
+							tx.Rollback()
+							return nil, fmt.Errorf("stock is still being posted for %s. Please wait a moment and try again", strings.TrimSpace(d.Name))
+						}
+					}
 					tx.Rollback()
 					return nil, fmt.Errorf("insufficient stock on hand for %s (available=%s, invoice_qty=%s)", strings.TrimSpace(d.Name), available.String(), d.DetailQty.String())
 				}
+			ledgerOKConfirmBatch:
 				reservedByBatch[batchKey] = alreadyBatch.Add(d.DetailQty)
 				reservedGlobal[globalKey] = reservedGlobal[globalKey].Add(d.DetailQty)
 			}
