@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
+	"gorm.io/gorm"
 )
 
 type StockHistory struct {
@@ -35,6 +36,37 @@ type StockHistory struct {
 	CumulativeSequence       int             `gorm:"index;default:0" json:"cumulative_sequence"`
 	CreatedAt                time.Time       `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt                time.Time       `gorm:"autoUpdateTime" json:"updated_at"`
+}
+
+// BeforeSave enforces internal invariants for the inventory ledger.
+//
+// CRITICAL: Many FIFO queries rely on IsOutgoing to classify consumptions.
+// In production data, some historical rows (e.g. certain adjustments) may have qty<0 but IsOutgoing=false,
+// which makes FIFO think stock exists (or doesn't) incorrectly and can lead to "insufficient FIFO layers".
+//
+// We ensure:
+// - IsOutgoing is never nil
+// - IsTransferIn is never nil
+// - For non-zero qty, IsOutgoing always matches qty sign (qty < 0 => outgoing).
+func (sh *StockHistory) BeforeSave(tx *gorm.DB) error {
+	_ = tx // signature required by gorm; tx may be nil in tests
+	if sh == nil {
+		return nil
+	}
+	if sh.IsOutgoing == nil {
+		b := false
+		sh.IsOutgoing = &b
+	}
+	if sh.IsTransferIn == nil {
+		b := false
+		sh.IsTransferIn = &b
+	}
+	if sh.Qty.IsZero() {
+		return nil
+	}
+	b := sh.Qty.IsNegative()
+	sh.IsOutgoing = &b
+	return nil
 }
 
 // type Stock struct {
