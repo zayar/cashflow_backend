@@ -266,6 +266,11 @@ func graphqlHandler() gin.HandlerFunc {
 
 	h := handler.NewDefaultServer(graph.NewExecutableSchema(c))
 	h.Use(otelgqlgen.Middleware())
+
+	// GraphQL guardrails to prevent accidental expensive queries.
+	// Env overrides:
+	// - GQL_COMPLEXITY_LIMIT (default 2000)
+	h.Use(extension.FixedComplexityLimit(intFromEnv("GQL_COMPLEXITY_LIMIT", 2000)))
 	h.AddTransport(transport.POST{})
 	h.AddTransport(transport.MultipartForm{
 		MaxMemory:     32 << 20, // 32 MB
@@ -1052,4 +1057,16 @@ func envBoolDefault(key string, def bool) bool {
 	default:
 		return def
 	}
+}
+
+func intFromEnv(key string, def int) int {
+	val := strings.TrimSpace(os.Getenv(key))
+	if val == "" {
+		return def
+	}
+	n, err := strconv.Atoi(val)
+	if err != nil {
+		return def
+	}
+	return n
 }

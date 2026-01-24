@@ -3,6 +3,10 @@ package reports
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
 
 	"github.com/mmdatafocus/books_backend/config"
 	"github.com/mmdatafocus/books_backend/models"
@@ -193,10 +197,23 @@ func GetAllJournalReport(ctx context.Context, fromDate models.MyDateString, toDa
 
 	// DB query
 	var results []*models.AccountJournal
-	// var err error
-	err = dbCtx.Order("transaction_date_time DESC, id DESC").Find(&results).Error
+
+	// Safety guard: never allow unbounded report reads to exhaust DB/API resources.
+	// Env override: REPORT_MAX_ROWS (default 10000).
+	maxRows := 10000
+	if v := strings.TrimSpace(os.Getenv("REPORT_MAX_ROWS")); v != "" {
+		if n, perr := strconv.Atoi(v); perr == nil && n > 0 {
+			maxRows = n
+		}
+	}
+
+	// Fetch maxRows+1 to detect overflow and fail fast with a clear message.
+	err = dbCtx.Order("transaction_date_time DESC, id DESC").Limit(maxRows + 1).Find(&results).Error
 	if err != nil {
 		return nil, err
+	}
+	if len(results) > maxRows {
+		return nil, fmt.Errorf("journal report result too large (%d+ rows). Please narrow the date range or use pagination (REPORT_MAX_ROWS=%d)", maxRows, maxRows)
 	}
 
 	return results, nil

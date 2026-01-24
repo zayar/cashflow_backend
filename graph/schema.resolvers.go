@@ -72,17 +72,17 @@ func (r *accountJournalResolver) ReferenceData(ctx context.Context, obj *models.
 	case "JN":
 		return models.GetJournal(ctx, obj.ReferenceId)
 	case "IV":
-		return models.GetSalesInvoice(ctx, obj.ReferenceId)
+		return middlewares.GetSalesInvoice(ctx, obj.ReferenceId)
 	case "IP":
-		return models.GetPaidInvoice(ctx, obj.ReferenceId)
+		return middlewares.GetPaidInvoice(ctx, obj.ReferenceId)
 	case "CN":
-		return models.GetCreditNote(ctx, obj.ReferenceId)
+		return middlewares.GetCreditNote(ctx, obj.ReferenceId)
 	case "BL":
-		return models.GetBill(ctx, obj.ReferenceId)
+		return middlewares.GetBill(ctx, obj.ReferenceId)
 	case "SP":
-		return models.GetSupplierPayment(ctx, obj.ReferenceId)
+		return middlewares.GetSupplierPayment(ctx, obj.ReferenceId)
 	case "BP":
-		return models.GetSupplierPaidBill(ctx, obj.ReferenceId)
+		return middlewares.GetSupplierPaidBill(ctx, obj.ReferenceId)
 	default:
 		return nil, fmt.Errorf("unsupported reference type: %s", obj.ReferenceType)
 	}

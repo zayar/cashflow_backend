@@ -9,12 +9,12 @@ import (
 
 type StockHistory struct {
 	ID                int                `gorm:"primary_key" json:"id"`
-	BusinessId        string             `gorm:"index;not null" json:"business_id"`
-	WarehouseId       int                `gorm:"index;not null" json:"warehouse_id"`
+	BusinessId        string             `gorm:"index;not null;index:idx_sh_biz_stock_date,priority:1;index:idx_sh_biz_wh_stock_date,priority:1" json:"business_id"`
+	WarehouseId       int                `gorm:"index;not null;index:idx_sh_biz_wh_stock_date,priority:2" json:"warehouse_id"`
 	ProductId         int                `gorm:"index;not null" json:"product_id"`
 	ProductType       ProductType        `gorm:"type:enum('S','G','C','V','I');default:S" json:"product_type"`
 	BatchNumber       string             `gorm:"size:100" json:"batch_number"`
-	StockDate         time.Time          `gorm:"not null" json:"stock_date"`
+	StockDate         time.Time          `gorm:"not null;index:idx_sh_biz_stock_date,priority:2;index:idx_sh_biz_wh_stock_date,priority:3" json:"stock_date"`
 	Qty               decimal.Decimal    `gorm:"type:decimal(20,4);default:0" json:"qty"`
 	ClosingQty        decimal.Decimal    `gorm:"type:decimal(20,4);default:0" json:"closing_qty"`
 	Description       string             `gorm:"index;size:100;not null" json:"description"`

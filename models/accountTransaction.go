@@ -63,9 +63,9 @@ func ConvertToPubSubMessage(record PubSubMessageRecord) config.PubSubMessage {
 
 type AccountJournal struct {
 	ID                  int                  `gorm:"primary_key" json:"id"`
-	BusinessId          string               `gorm:"index;not null;index:idx_aj_biz_date,priority:1;index:idx_aj_biz_ref,priority:1" json:"business_id"`
-	BranchId            int                  `gorm:"index;not null" json:"branch_id"`
-	TransactionDateTime time.Time            `gorm:"index;not null;index:idx_aj_biz_date,priority:2" json:"transaction_date_time"`
+	BusinessId          string               `gorm:"index;not null;index:idx_aj_biz_date,priority:1;index:idx_aj_biz_ref,priority:1;index:idx_aj_biz_branch_date,priority:1" json:"business_id"`
+	BranchId            int                  `gorm:"index;not null;index:idx_aj_biz_branch_date,priority:2" json:"branch_id"`
+	TransactionDateTime time.Time            `gorm:"index;not null;index:idx_aj_biz_date,priority:2;index:idx_aj_biz_branch_date,priority:3" json:"transaction_date_time"`
 	TransactionNumber   string               `gorm:"size:255" json:"transaction_number"`
 	TransactionDetails  string               `gorm:"type:text" json:"transaction_details"`
 	ReferenceNumber     string               `gorm:"size:255" json:"reference_number"`

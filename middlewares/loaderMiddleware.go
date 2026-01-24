@@ -80,6 +80,11 @@ type Loaders struct {
 	supplierCreditDocumentLoader *dataloader.Loader[int, []*models.Document]
 
 	creditNoteDetailsLoader *dataloader.Loader[int, []*models.CreditNoteDetail]
+	creditNoteByIDLoader    *dataloader.Loader[int, *models.CreditNote]
+
+	paidInvoiceByIDLoader       *dataloader.Loader[int, *models.PaidInvoice]
+	supplierPaymentByIDLoader   *dataloader.Loader[int, *models.SupplierPayment]
+	supplierPaidBillByIDLoader  *dataloader.Loader[int, *models.SupplierPaidBill]
 
 	accountJournalLoader *dataloader.Loader[int, *models.AccountJournal]
 
@@ -207,6 +212,11 @@ func NewLoaders(conn *gorm.DB) *Loaders {
 	supplierCreditDetailReader := &supplierCreditDetailReader{db: conn}
 
 	creditNoteDetailsReader := &creditNoteDetailsReader{db: conn}
+	creditNoteByIDReader := &creditNoteByIDReader{db: conn}
+
+	paidInvoiceByIDReader := &paidInvoiceByIDReader{db: conn}
+	supplierPaymentByIDReader := &supplierPaymentByIDReader{db: conn}
+	supplierPaidBillByIDReader := &supplierPaidBillByIDReader{db: conn}
 
 	accountJournalReader := &accountJournalReader{db: conn}
 
@@ -324,6 +334,11 @@ func NewLoaders(conn *gorm.DB) *Loaders {
 		supplierCreditDocumentLoader: dataloader.NewBatchedLoader(supplierCreditDocumentReader.GetDocuments, dataloader.WithWait[int, []*models.Document](time.Millisecond)),
 
 		creditNoteDetailsLoader: dataloader.NewBatchedLoader(creditNoteDetailsReader.GetDetails, dataloader.WithWait[int, []*models.CreditNoteDetail](time.Millisecond)),
+		creditNoteByIDLoader:    dataloader.NewBatchedLoader(creditNoteByIDReader.getCreditNotesByID, dataloader.WithWait[int, *models.CreditNote](time.Millisecond)),
+
+		paidInvoiceByIDLoader:      dataloader.NewBatchedLoader(paidInvoiceByIDReader.getPaidInvoicesByID, dataloader.WithWait[int, *models.PaidInvoice](time.Millisecond)),
+		supplierPaymentByIDLoader:  dataloader.NewBatchedLoader(supplierPaymentByIDReader.getSupplierPaymentsByID, dataloader.WithWait[int, *models.SupplierPayment](time.Millisecond)),
+		supplierPaidBillByIDLoader: dataloader.NewBatchedLoader(supplierPaidBillByIDReader.getSupplierPaidBillsByID, dataloader.WithWait[int, *models.SupplierPaidBill](time.Millisecond)),
 
 		accountJournalLoader: dataloader.NewBatchedLoader(accountJournalReader.GetAccountJournals, dataloader.WithWait[int, *models.AccountJournal](time.Millisecond)),
 
