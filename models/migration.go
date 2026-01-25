@@ -35,6 +35,7 @@ func MigrateTable() {
 		&IdempotencyKey{},
 		&InventoryMovement{}, &CogsAllocation{},
 		&ReconciliationReport{},
+		&DocumentTemplate{},
 	)
 	if err != nil {
 		log.Fatal(err)

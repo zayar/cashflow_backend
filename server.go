@@ -870,6 +870,14 @@ func main() {
 	// Customer Transactions
 	r.GET("/api/customers/:id/transactions", customerTransactionsHandler())
 
+	// Document Templates (Settings -> Templates)
+	r.GET("/api/templates", templatesListHandler())
+	r.GET("/api/templates/default", templatesGetDefaultHandler())
+	r.GET("/api/templates/:id", templatesGetHandler())
+	r.POST("/api/templates", templatesCreateHandler())
+	r.PUT("/api/templates/:id", templatesUpdateHandler())
+	r.POST("/api/templates/:id/set-default", templatesSetDefaultHandler())
+
 	// go RunAccountingWorkflow()
 	r.NoRoute(customNotFoundHandler)
 
@@ -1164,5 +1172,428 @@ func customerTransactionsHandler() gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, resp)
+	}
+}
+
+func resolveBusinessIdForUI(c *gin.Context) (string, error) {
+	// Ensure request is authenticated (SessionMiddleware must put username in context).
+	username, ok := utils.GetUsernameFromContext(c.Request.Context())
+	if !ok || strings.TrimSpace(username) == "" {
+		return "", errors.New("unauthorized")
+	}
+
+	// Admin override: allow explicit business_id param; non-admin only for their own business.
+	businessId := strings.TrimSpace(c.Query("business_id"))
+	if businessId != "" {
+		if err := authorizeInternalBusiness(c.Request.Context(), businessId); err != nil {
+			return "", errors.New("unauthorized")
+		}
+		return businessId, nil
+	}
+
+	// Default: derive from authenticated user (cache first, DB fallback).
+	var user models.User
+	exists, err := config.GetRedisObject("User:"+username, &user)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		db := config.GetDB()
+		if db == nil {
+			return "", errors.New("db is nil")
+		}
+		if err := db.WithContext(c.Request.Context()).
+			Model(&models.User{}).
+			Where("username = ?", username).
+			Take(&user).Error; err != nil {
+			return "", errors.New("unauthorized")
+		}
+	}
+	businessId = strings.TrimSpace(user.BusinessId)
+	if businessId == "" {
+		return "", errors.New("business_id is required")
+	}
+	return businessId, nil
+}
+
+type templateUpsertRequest struct {
+	DocumentType string          `json:"document_type"`
+	Name         string          `json:"name"`
+	IsDefault    *bool           `json:"is_default,omitempty"`
+	ConfigJson   json.RawMessage `json:"config_json"`
+}
+
+func validateTemplateUpsert(req *templateUpsertRequest) (string, string, bool, string, error) {
+	if req == nil {
+		return "", "", false, "", errors.New("invalid request")
+	}
+
+	documentType := strings.TrimSpace(req.DocumentType)
+	if documentType == "" || !models.IsAllowedDocumentTemplateType(documentType) {
+		return "", "", false, "", errors.New("invalid document_type")
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		return "", "", false, "", errors.New("name is required")
+	}
+	if len(name) > 150 {
+		return "", "", false, "", errors.New("name is too long")
+	}
+
+	// Default config: empty object.
+	raw := req.ConfigJson
+	if len(raw) == 0 {
+		raw = []byte(`{}`)
+	}
+	// Basic JSON validation + normalization to string.
+	var tmp any
+	if err := json.Unmarshal(raw, &tmp); err != nil {
+		return "", "", false, "", errors.New("config_json must be valid JSON")
+	}
+	normalized, err := json.Marshal(tmp)
+	if err != nil {
+		return "", "", false, "", errors.New("config_json must be valid JSON")
+	}
+	if len(normalized) > 200_000 {
+		return "", "", false, "", errors.New("config_json is too large")
+	}
+
+	isDefault := false
+	if req.IsDefault != nil {
+		isDefault = *req.IsDefault
+	}
+	return documentType, name, isDefault, string(normalized), nil
+}
+
+func templatesListHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		businessId, err := resolveBusinessIdForUI(c)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		documentType := strings.TrimSpace(c.Query("document_type"))
+		if documentType != "" && !models.IsAllowedDocumentTemplateType(documentType) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid document_type"})
+			return
+		}
+
+		db := config.GetDB()
+		if db == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "db is nil"})
+			return
+		}
+
+		var templates []models.DocumentTemplate
+		q := db.WithContext(c.Request.Context()).
+			Model(&models.DocumentTemplate{}).
+			Where("business_id = ?", businessId)
+		if documentType != "" {
+			q = q.Where("document_type = ?", documentType)
+		}
+		if err := q.Order("is_default DESC").Order("updated_at DESC").Find(&templates).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"templates": templates})
+	}
+}
+
+func templatesGetDefaultHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		businessId, err := resolveBusinessIdForUI(c)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		documentType := strings.TrimSpace(c.Query("document_type"))
+		if documentType == "" || !models.IsAllowedDocumentTemplateType(documentType) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid document_type"})
+			return
+		}
+
+		db := config.GetDB()
+		if db == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "db is nil"})
+			return
+		}
+
+		var tpl models.DocumentTemplate
+		if err := db.WithContext(c.Request.Context()).
+			Model(&models.DocumentTemplate{}).
+			Where("business_id = ? AND document_type = ? AND is_default = true", businessId, documentType).
+			Order("updated_at DESC").
+			First(&tpl).Error; err != nil {
+			// If not found, return null template (frontend will fall back to built-in look).
+			c.JSON(http.StatusOK, gin.H{"template": nil})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"template": tpl})
+	}
+}
+
+func templatesGetHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		businessId, err := resolveBusinessIdForUI(c)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		id, err := strconv.Atoi(c.Param("id"))
+		if err != nil || id <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+			return
+		}
+
+		db := config.GetDB()
+		if db == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "db is nil"})
+			return
+		}
+
+		var tpl models.DocumentTemplate
+		if err := db.WithContext(c.Request.Context()).
+			Model(&models.DocumentTemplate{}).
+			Where("id = ? AND business_id = ?", id, businessId).
+			First(&tpl).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"template": tpl})
+	}
+}
+
+func templatesCreateHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		businessId, err := resolveBusinessIdForUI(c)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+
+		var req templateUpsertRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+			return
+		}
+		documentType, name, isDefault, configStr, err := validateTemplateUpsert(&req)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		db := config.GetDB()
+		if db == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "db is nil"})
+			return
+		}
+
+		tpl := models.DocumentTemplate{
+			BusinessId:   businessId,
+			DocumentType: documentType,
+			Name:         name,
+			IsDefault:    isDefault,
+			ConfigJson:   configStr,
+		}
+
+		tx := db.WithContext(c.Request.Context()).Begin()
+		if tx.Error != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "db error"})
+			return
+		}
+		defer func() {
+			// In case caller returns early.
+			_ = tx.Rollback().Error
+		}()
+
+		// If this template is default, unset any previous default for this business+type.
+		if tpl.IsDefault {
+			if err := tx.Model(&models.DocumentTemplate{}).
+				Where("business_id = ? AND document_type = ? AND is_default = true", businessId, documentType).
+				Update("is_default", false).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		} else {
+			// If no default exists yet for this document type, make the first template the default.
+			var count int64
+			if err := tx.Model(&models.DocumentTemplate{}).
+				Where("business_id = ? AND document_type = ? AND is_default = true", businessId, documentType).
+				Count(&count).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			if count == 0 {
+				tpl.IsDefault = true
+			}
+		}
+
+		if err := tx.Create(&tpl).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if err := tx.Commit().Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"template": tpl})
+	}
+}
+
+func templatesUpdateHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		businessId, err := resolveBusinessIdForUI(c)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		id, err := strconv.Atoi(c.Param("id"))
+		if err != nil || id <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+			return
+		}
+
+		var req templateUpsertRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+			return
+		}
+		documentType, name, isDefault, configStr, err := validateTemplateUpsert(&req)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		db := config.GetDB()
+		if db == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "db is nil"})
+			return
+		}
+
+		var existing models.DocumentTemplate
+		if err := db.WithContext(c.Request.Context()).
+			Model(&models.DocumentTemplate{}).
+			Where("id = ? AND business_id = ?", id, businessId).
+			First(&existing).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+
+		// Do not allow moving templates across document types for now (keeps UX predictable).
+		if existing.DocumentType != documentType {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "document_type cannot be changed"})
+			return
+		}
+
+		tx := db.WithContext(c.Request.Context()).Begin()
+		if tx.Error != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "db error"})
+			return
+		}
+		defer func() { _ = tx.Rollback().Error }()
+
+		if isDefault {
+			if err := tx.Model(&models.DocumentTemplate{}).
+				Where("business_id = ? AND document_type = ? AND is_default = true AND id <> ?", businessId, documentType, id).
+				Update("is_default", false).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		}
+
+		if err := tx.Model(&models.DocumentTemplate{}).
+			Where("id = ? AND business_id = ?", id, businessId).
+			Updates(map[string]any{
+				"name":       name,
+				"is_default": isDefault,
+				"config_json": configStr,
+			}).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		if err := tx.Commit().Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Reload the updated record.
+		var tpl models.DocumentTemplate
+		if err := db.WithContext(c.Request.Context()).
+			Model(&models.DocumentTemplate{}).
+			Where("id = ? AND business_id = ?", id, businessId).
+			First(&tpl).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"template": tpl})
+	}
+}
+
+func templatesSetDefaultHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		businessId, err := resolveBusinessIdForUI(c)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		id, err := strconv.Atoi(c.Param("id"))
+		if err != nil || id <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+			return
+		}
+
+		db := config.GetDB()
+		if db == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "db is nil"})
+			return
+		}
+
+		var tpl models.DocumentTemplate
+		if err := db.WithContext(c.Request.Context()).
+			Model(&models.DocumentTemplate{}).
+			Where("id = ? AND business_id = ?", id, businessId).
+			First(&tpl).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+
+		tx := db.WithContext(c.Request.Context()).Begin()
+		if tx.Error != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "db error"})
+			return
+		}
+		defer func() { _ = tx.Rollback().Error }()
+
+		if err := tx.Model(&models.DocumentTemplate{}).
+			Where("business_id = ? AND document_type = ? AND is_default = true AND id <> ?", businessId, tpl.DocumentType, tpl.ID).
+			Update("is_default", false).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if err := tx.Model(&models.DocumentTemplate{}).
+			Where("id = ? AND business_id = ?", tpl.ID, businessId).
+			Update("is_default", true).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		if err := tx.Commit().Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Return the updated default template.
+		var out models.DocumentTemplate
+		if err := db.WithContext(c.Request.Context()).
+			Model(&models.DocumentTemplate{}).
+			Where("id = ? AND business_id = ?", tpl.ID, businessId).
+			First(&out).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"template": out})
 	}
 }
