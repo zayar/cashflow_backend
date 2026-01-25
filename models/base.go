@@ -441,10 +441,26 @@ func GetProductStock(tx *gorm.DB, ctx context.Context, businessId string, wareho
 	default:
 		return currentStock, errors.New("invalid product type")
 	}
-	if err := dbCtx.Where("product_id = ? AND warehouse_id = ? AND batch_number = ?", productId, warehouseId, batchNumber).Select("current_qty").Scan(&currentStock).Error; err != nil {
-		return currentStock, err
+	// Batch-empty mode: treat batches as fungible when checking on-hand.
+	// This avoids false negatives when incoming stock is batch-tracked but outgoing docs omit batch_number,
+	// which can make the batch_number='' summary row negative even though total stock across batches is positive.
+	if batchNumber == "" {
+		if err := dbCtx.
+			Where("product_id = ? AND warehouse_id = ?", productId, warehouseId).
+			Select("COALESCE(SUM(current_qty), 0)").
+			Scan(&currentStock).Error; err != nil {
+			return currentStock, err
+		}
+	} else {
+		if err := dbCtx.
+			Where("product_id = ? AND warehouse_id = ? AND batch_number = ?", productId, warehouseId, batchNumber).
+			Select("current_qty").
+			Scan(&currentStock).Error; err != nil {
+			return currentStock, err
+		}
 	}
 
+	// Only error if the computed on-hand is negative.
 	if currentStock.IsNegative() {
 		return currentStock, errors.New("product stock cannot be negative")
 	}
