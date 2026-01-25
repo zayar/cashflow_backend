@@ -866,6 +866,10 @@ func main() {
 	// Not supported yet: requires explicit reversal policy.
 	r.POST("/internal/void-clone/transfer-order", voidCloneNotSupportedHandler("transfer order"))
 	r.POST("/internal/void-clone/inventory-adjustment", voidCloneNotSupportedHandler("inventory adjustment"))
+	
+	// Customer Transactions
+	r.GET("/api/customers/:id/transactions", customerTransactionsHandler())
+
 	// go RunAccountingWorkflow()
 	r.NoRoute(customNotFoundHandler)
 
@@ -1069,4 +1073,55 @@ func intFromEnv(key string, def int) int {
 		return def
 	}
 	return n
+}
+
+func customerTransactionsHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Auth check
+		if _, ok := utils.GetUsernameFromContext(c.Request.Context()); !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+
+		customerIdStr := c.Param("id")
+		customerId, err := strconv.Atoi(customerIdStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid customer id"})
+			return
+		}
+
+		// Query params
+		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+		status := c.Query("status")
+		search := c.Query("q")
+		typeStr := c.Query("type") // comma separated
+		var types []string
+		if typeStr != "" {
+			types = strings.Split(typeStr, ",")
+		}
+
+		// Date range
+		var fromDate, toDate *time.Time
+		if v := c.Query("from"); v != "" {
+			if t, err := time.Parse("2006-01-02", v); err == nil {
+				fromDate = &t
+			}
+		}
+		if v := c.Query("to"); v != "" {
+			if t, err := time.Parse("2006-01-02", v); err == nil {
+				// End of day
+				t = t.Add(24 * time.Hour).Add(-1 * time.Second)
+				toDate = &t
+			}
+		}
+
+		resp, err := models.GetCustomerTransactions(c.Request.Context(), customerId, fromDate, toDate, types, status, search, page, limit)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, resp)
+	}
 }
