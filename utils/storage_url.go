@@ -37,6 +37,17 @@ func ExtractObjectKeyFromURL(rawURL string) string {
 		return ""
 	}
 
+	// Allow passing raw object keys directly (e.g. "businessId/products/logo.png").
+	// This keeps delete flows working even when BuildObjectAccessURL returns the key
+	// (missing STORAGE_ACCESS_BASE_URL / GCS_URL envs).
+	if !strings.Contains(rawURL, "://") && !strings.HasPrefix(rawURL, "/") && strings.Contains(rawURL, "/") {
+		// Basic hardening: reject path traversal.
+		if strings.Contains(rawURL, "..") {
+			return ""
+		}
+		return rawURL
+	}
+
 	if strings.HasPrefix(rawURL, "gs://") {
 		rawURL = strings.TrimPrefix(rawURL, "gs://")
 		parts := strings.SplitN(rawURL, "/", 2)
