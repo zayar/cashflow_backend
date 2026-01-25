@@ -1078,7 +1078,8 @@ func intFromEnv(key string, def int) int {
 func customerTransactionsHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Auth check
-		if _, ok := utils.GetUsernameFromContext(c.Request.Context()); !ok {
+		username, ok := utils.GetUsernameFromContext(c.Request.Context())
+		if !ok || username == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return
 		}
@@ -1088,6 +1089,45 @@ func customerTransactionsHandler() gin.HandlerFunc {
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid customer id"})
 			return
+		}
+
+		// Ensure business_id is set in context for tenant isolation.
+		// SessionMiddleware only sets username/token; most model read paths expect business_id in ctx.
+		businessId := strings.TrimSpace(c.Query("business_id"))
+		if businessId != "" {
+			// Allow admin to act on any business; non-admin only on their own business.
+			if err := authorizeInternalBusiness(c.Request.Context(), businessId); err != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+				return
+			}
+		} else {
+			// Derive from the authenticated user (default for UI calls).
+			var user models.User
+			exists, err := config.GetRedisObject("User:"+username, &user)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			if !exists {
+				db := config.GetDB()
+				if db == nil {
+					c.JSON(http.StatusServiceUnavailable, gin.H{"error": "db is nil"})
+					return
+				}
+				if err := db.WithContext(c.Request.Context()).
+					Model(&models.User{}).
+					Where("username = ?", username).
+					Take(&user).Error; err != nil {
+					c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+					return
+				}
+			}
+			businessId = strings.TrimSpace(user.BusinessId)
+			if businessId == "" {
+				// For safety: require explicit business_id rather than guessing for admin/system users.
+				c.JSON(http.StatusBadRequest, gin.H{"error": "business_id is required"})
+				return
+			}
 		}
 
 		// Query params
@@ -1116,7 +1156,8 @@ func customerTransactionsHandler() gin.HandlerFunc {
 			}
 		}
 
-		resp, err := models.GetCustomerTransactions(c.Request.Context(), customerId, fromDate, toDate, types, status, search, page, limit)
+		ctx := utils.SetBusinessIdInContext(c.Request.Context(), businessId)
+		resp, err := models.GetCustomerTransactions(ctx, customerId, fromDate, toDate, types, status, search, page, limit)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
