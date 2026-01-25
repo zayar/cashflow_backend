@@ -65,6 +65,26 @@ func ExtractObjectKeyFromURL(rawURL string) string {
 		if key := parsed.Query().Get("objectKey"); key != "" {
 			return key
 		}
+
+		// Handle common Google Cloud Storage URL formats even when env vars are missing.
+		// Examples:
+		// - https://storage.googleapis.com/<bucket>/<objectKey>
+		// - https://<bucket>.storage.googleapis.com/<objectKey>
+		// - https://storage.cloud.google.com/<bucket>/<objectKey>
+		host := strings.ToLower(strings.TrimSpace(parsed.Host))
+		p := strings.TrimPrefix(parsed.Path, "/")
+		if host == "storage.googleapis.com" || host == "storage.cloud.google.com" {
+			parts := strings.SplitN(p, "/", 2)
+			if len(parts) == 2 && parts[1] != "" {
+				return parts[1]
+			}
+		}
+		if strings.HasSuffix(host, ".storage.googleapis.com") {
+			// bucket is in host; object key is the full path
+			if p != "" {
+				return p
+			}
+		}
 	}
 
 	gcsURL := strings.TrimSpace(os.Getenv("GCS_URL"))
