@@ -1709,26 +1709,59 @@ func ProcessIncomingStocks(tx *gorm.DB, logger *logrus.Logger, stockHistories []
 		}
 
 		if shouldRecalc {
-			remainingIncomingStockHistories, err := GetRemainingStockHistoriesByDate(tx, stockHistory.WarehouseId, stockHistory.ProductId, string(stockHistory.ProductType), stockHistory.BatchNumber, utils.NewFalse(), stockHistory.StockDate)
-			if err != nil {
-				config.LogError(logger, "MainWorkflow.go", "ProcessIncomingStocks", "GetRemainingStockHistoriesByDate", stockHistory, err)
-				return accountIds, err
-			}
-			remainingOutgoingStockHistories, err := GetRemainingStockHistoriesByCumulativeQty(tx, stockHistory.WarehouseId, stockHistory.ProductId, string(stockHistory.ProductType), stockHistory.BatchNumber, utils.NewTrue(), lastCumulativeIncomingQty)
-			if err != nil {
-				config.LogError(logger, "MainWorkflow.go", "ProcessIncomingStocks", "GetRemainingStockHistoriesByCumulativeQty", stockHistory, err)
-				return accountIds, err
-			}
-			remainingIncomingStockHistories, remainingOutgoingStockHistories = FilterStockHistories(remainingIncomingStockHistories, remainingOutgoingStockHistories)
+			// Batch-empty mode: treat batches as fungible (unbatched outgoing can consume from any incoming batch).
+			// In this mode, per-batch cumulative_outgoing_qty/cumulative_incoming_qty is not meaningful, so we must
+			// compute consumed qty globally and start FIFO at the correct partial layer.
+			if stockHistory.BatchNumber == "" {
+				consumedBefore, e := getGlobalOutgoingQtyBeforeDate(
+					tx, stockHistory.BusinessId, stockHistory.WarehouseId, stockHistory.ProductId, stockHistory.ProductType, stockHistory.StockDate,
+				)
+				if e != nil {
+					config.LogError(logger, "MainWorkflow.go", "ProcessIncomingStocks", "GetGlobalOutgoingQtyBeforeDate", stockHistory, e)
+					return accountIds, e
+				}
+				remainingIncomingStockHistories, startCurrentQty, e := getRemainingIncomingStockHistoriesFungible(
+					tx, stockHistory.BusinessId, stockHistory.WarehouseId, stockHistory.ProductId, stockHistory.ProductType, consumedBefore,
+				)
+				if e != nil {
+					config.LogError(logger, "MainWorkflow.go", "ProcessIncomingStocks", "GetRemainingIncomingStockHistoriesFungible", stockHistory, e)
+					return accountIds, e
+				}
+				remainingOutgoingStockHistories, e := GetRemainingStockHistoriesByDate(
+					tx, stockHistory.WarehouseId, stockHistory.ProductId, string(stockHistory.ProductType), stockHistory.BatchNumber, utils.NewTrue(), stockHistory.StockDate,
+				)
+				if e != nil {
+					config.LogError(logger, "MainWorkflow.go", "ProcessIncomingStocks", "GetRemainingOutgoingStockHistoriesByDate", stockHistory, e)
+					return accountIds, e
+				}
+				remainingIncomingStockHistories, remainingOutgoingStockHistories = FilterStockHistories(remainingIncomingStockHistories, remainingOutgoingStockHistories)
+				// Pass 0 reference to recalc for ALL outgoing references in scope (backdated incoming).
+				accountIds, e = calculateCogs(tx, logger, productDetail, decimal.NewFromInt(0), startCurrentQty, remainingIncomingStockHistories, remainingOutgoingStockHistories, 0, "")
+				if e != nil {
+					return accountIds, e
+				}
+			} else {
+				remainingIncomingStockHistories, err := GetRemainingStockHistoriesByDate(tx, stockHistory.WarehouseId, stockHistory.ProductId, string(stockHistory.ProductType), stockHistory.BatchNumber, utils.NewFalse(), stockHistory.StockDate)
+				if err != nil {
+					config.LogError(logger, "MainWorkflow.go", "ProcessIncomingStocks", "GetRemainingStockHistoriesByDate", stockHistory, err)
+					return accountIds, err
+				}
+				remainingOutgoingStockHistories, err := GetRemainingStockHistoriesByCumulativeQty(tx, stockHistory.WarehouseId, stockHistory.ProductId, string(stockHistory.ProductType), stockHistory.BatchNumber, utils.NewTrue(), lastCumulativeIncomingQty)
+				if err != nil {
+					config.LogError(logger, "MainWorkflow.go", "ProcessIncomingStocks", "GetRemainingStockHistoriesByCumulativeQty", stockHistory, err)
+					return accountIds, err
+				}
+				remainingIncomingStockHistories, remainingOutgoingStockHistories = FilterStockHistories(remainingIncomingStockHistories, remainingOutgoingStockHistories)
 
-			startProcessQty := decimal.NewFromInt(0)
-			if len(remainingOutgoingStockHistories) > 0 {
-				startProcessQty = remainingOutgoingStockHistories[0].CumulativeOutgoingQty.Sub(lastCumulativeIncomingQty)
-			}
-			// Pass 0 reference to recalc for ALL outgoing references in scope (backdated incoming).
-			accountIds, err = calculateCogs(tx, logger, productDetail, startProcessQty, decimal.NewFromInt(0), remainingIncomingStockHistories, remainingOutgoingStockHistories, 0, "")
-			if err != nil {
-				return accountIds, err
+				startProcessQty := decimal.NewFromInt(0)
+				if len(remainingOutgoingStockHistories) > 0 {
+					startProcessQty = remainingOutgoingStockHistories[0].CumulativeOutgoingQty.Sub(lastCumulativeIncomingQty)
+				}
+				// Pass 0 reference to recalc for ALL outgoing references in scope (backdated incoming).
+				accountIds, err = calculateCogs(tx, logger, productDetail, startProcessQty, decimal.NewFromInt(0), remainingIncomingStockHistories, remainingOutgoingStockHistories, 0, "")
+				if err != nil {
+					return accountIds, err
+				}
 			}
 		}
 	}
