@@ -955,6 +955,14 @@ func calculateCogs(tx *gorm.DB, logger *logrus.Logger, productDetail ProductDeta
 			refType = models.AccountReferenceTypeSupplierCredit
 		case models.StockReferenceTypeTransferOrder:
 			refType = models.AccountReferenceTypeTransferOrder
+		case models.StockReferenceTypeInventoryAdjustmentQuantity:
+			// Inventory Adjustment (Quantity) journals are posted before FIFO valuation splitting.
+			// When FIFO recalculates outgoing unit costs, we must repost the journal so Balance Sheet
+			// inventory asset matches the inventory valuation ledger.
+			refType = models.AccountReferenceTypeInventoryAdjustmentQuantity
+		case models.StockReferenceTypeInventoryAdjustmentValue:
+			// Inventory Adjustment (Value) can also trigger valuation reprice adjustments.
+			refType = models.AccountReferenceTypeInventoryAdjustmentValue
 		default:
 			// Unknown/unsupported reference types: skip journal repost.
 			continue
