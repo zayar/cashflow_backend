@@ -207,7 +207,25 @@ FROM
     AllProducts p
     LEFT JOIN StockTotals s ON p.product_id = s.product_id
         AND p.product_type = s.product_type
-ORDER BY p.product_name;
+
+UNION ALL
+
+-- Include ledger rows whose product master record no longer exists (deleted products).
+SELECT
+    s.product_id,
+    s.product_type,
+    s.stock_on_hand as stock_on_hand,
+    s.asset_value as asset_value,
+    CONCAT('[Deleted product] ', s.product_type, '-', s.product_id) AS product_name,
+    NULL AS product_unit_id,
+    NULL AS sku
+FROM
+    StockTotals s
+    LEFT JOIN AllProducts p ON p.product_id = s.product_id AND p.product_type = s.product_type
+WHERE
+    p.product_id IS NULL
+
+ORDER BY product_name;
 `
 
 // SQL for SPECIFIC warehouse (ledger-of-record only).
@@ -257,7 +275,25 @@ FROM
     AllProducts p
     LEFT JOIN StockTotals s ON p.product_id = s.product_id
         AND p.product_type = s.product_type
-ORDER BY p.product_name;
+
+UNION ALL
+
+-- Include ledger rows whose product master record no longer exists (deleted products).
+SELECT
+    s.product_id,
+    s.product_type,
+    s.stock_on_hand as stock_on_hand,
+    s.asset_value as asset_value,
+    CONCAT('[Deleted product] ', s.product_type, '-', s.product_id) AS product_name,
+    NULL AS product_unit_id,
+    NULL AS sku
+FROM
+    StockTotals s
+    LEFT JOIN AllProducts p ON p.product_id = s.product_id AND p.product_type = s.product_type
+WHERE
+    p.product_id IS NULL
+
+ORDER BY product_name;
 `
 
 func GetInventorySummaryLedger(ctx context.Context, toDate MyDateString, warehouseId *int) ([]*InventorySummaryResponse, error) {
