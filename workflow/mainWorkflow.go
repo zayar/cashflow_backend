@@ -88,6 +88,53 @@ type StockHistoryDetailFragment struct {
 	BaseUnitValue     decimal.Decimal
 }
 
+// resolveValuationCounterAccount tries to find the non-inventory account used in the
+// existing valuation journal for a given reference.
+//
+// Why: some references (e.g. Inventory Adjustment Quantity/Value) post valuation against
+// an explicit adjustment account (inventoryAdjustment.AccountId), not the product purchase/COGS account.
+// When FIFO reprices outgoing unit costs, journal reposting must adjust the correct counter-account
+// so the Balance Sheet inventory asset reconciles with the stock ledger.
+func resolveValuationCounterAccount(
+	tx *gorm.DB,
+	refStockType models.StockReferenceType,
+	refId int,
+	inventoryAccountId int,
+) (int, error) {
+	if tx == nil || refId <= 0 {
+		return 0, nil
+	}
+
+	var refType models.AccountReferenceType
+	switch refStockType {
+	case models.StockReferenceTypeInventoryAdjustmentQuantity:
+		refType = models.AccountReferenceTypeInventoryAdjustmentQuantity
+	case models.StockReferenceTypeInventoryAdjustmentValue:
+		refType = models.AccountReferenceTypeInventoryAdjustmentValue
+	default:
+		return 0, nil
+	}
+
+	aj, _, _, err := GetExistingAccountJournal(tx, refId, refType)
+	if err != nil || aj == nil {
+		return 0, err
+	}
+
+	for _, t := range aj.AccountTransactions {
+		if t.IsInventoryValuation == nil || !*t.IsInventoryValuation {
+			continue
+		}
+		if inventoryAccountId > 0 && t.AccountId == inventoryAccountId {
+			continue
+		}
+		if t.AccountId > 0 {
+			return t.AccountId, nil
+		}
+	}
+
+	return 0, nil
+}
+
 // func mergeStockFragments(slice1, slice2 []*StockFragment) []*StockFragment {
 // 	uniqueStockFragments := make(map[string]*StockFragment)
 
@@ -926,8 +973,15 @@ func calculateCogs(tx *gorm.DB, logger *logrus.Logger, productDetail ProductDeta
 				journalDeltas[k] = m
 			}
 			// Outgoing valuation: DR purchase/COGS, CR inventory.
-			pAcc := productDetail.PurchaseAccountId
 			iAcc := productDetail.InventoryAccountId
+			pAcc := productDetail.PurchaseAccountId
+			if uStock.ReferenceType == models.StockReferenceTypeInventoryAdjustmentQuantity ||
+				uStock.ReferenceType == models.StockReferenceTypeInventoryAdjustmentValue {
+				// Use the existing journal's counter account (usually inventoryAdjustment.AccountId).
+				if counterAcc, cerr := resolveValuationCounterAccount(tx, uStock.ReferenceType, uStock.ReferenceId, iAcc); cerr == nil && counterAcc > 0 {
+					pAcc = counterAcc
+				}
+			}
 			m[pAcc] = valuationDelta{
 				BaseDebit:  m[pAcc].BaseDebit.Add(delta),
 				BaseCredit: m[pAcc].BaseCredit,
