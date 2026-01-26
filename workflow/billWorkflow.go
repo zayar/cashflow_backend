@@ -38,6 +38,20 @@ func ProcessBillWorkflow(tx *gorm.DB, logger *logrus.Logger, msg config.PubSubMe
 		}
 		valuationAccountIds, err := ProcessIncomingStocks(tx, logger, stockHistories)
 		if err != nil {
+			// Self-heal: FIFO layer inconsistencies can prevent ledger posting.
+			// Bills are incoming, but if they are backdated they can trigger FIFO recalculation for later outgoings.
+			// Retry a few times, rebuilding the specific failing (warehouse, product, batch) each time.
+			for attempts := 0; attempts < 3 && err != nil; attempts++ {
+				if scope, ok := parseFifoInsufficientScope(err); ok {
+					if rerr := rebuildInventoryForScope(tx, logger, msg.BusinessId, scope, bill.BillDate); rerr == nil {
+						valuationAccountIds, err = ProcessIncomingStocks(tx, logger, stockHistories)
+						continue
+					}
+				}
+				break
+			}
+		}
+		if err != nil {
 			config.LogError(logger, "BillWorkflow.go", "ProcessBillWorkflow > Create", "ProcessIncomingStocks", stockHistories, err)
 			return err
 		}
@@ -85,7 +99,18 @@ func ProcessBillWorkflow(tx *gorm.DB, logger *logrus.Logger, msg config.PubSubMe
 		mergedStockHistories := mergeStockHistories(stockHistories, oldStockHistories)
 		valuationAccountIds, err := ProcessStockHistories(tx, logger, mergedStockHistories)
 		if err != nil {
-			config.LogError(logger, "BillWorkflow.go", "ProcessBillWorkflow > Update", "ProcessIncomingStocks", ProcessIncomingStocks, err)
+			for attempts := 0; attempts < 3 && err != nil; attempts++ {
+				if scope, ok := parseFifoInsufficientScope(err); ok {
+					if rerr := rebuildInventoryForScope(tx, logger, msg.BusinessId, scope, bill.BillDate); rerr == nil {
+						valuationAccountIds, err = ProcessStockHistories(tx, logger, mergedStockHistories)
+						continue
+					}
+				}
+				break
+			}
+		}
+		if err != nil {
+			config.LogError(logger, "BillWorkflow.go", "ProcessBillWorkflow > Update", "ProcessStockHistories", mergedStockHistories, err)
 			return err
 		}
 
@@ -124,6 +149,17 @@ func ProcessBillWorkflow(tx *gorm.DB, logger *logrus.Logger, msg config.PubSubMe
 			return err
 		}
 		valuationAccountIds, err := ProcessStockHistories(tx, logger, stockHistories)
+		if err != nil {
+			for attempts := 0; attempts < 3 && err != nil; attempts++ {
+				if scope, ok := parseFifoInsufficientScope(err); ok {
+					if rerr := rebuildInventoryForScope(tx, logger, msg.BusinessId, scope, oldBill.BillDate); rerr == nil {
+						valuationAccountIds, err = ProcessStockHistories(tx, logger, stockHistories)
+						continue
+					}
+				}
+				break
+			}
+		}
 		if err != nil {
 			config.LogError(logger, "BillWorkflow.go", "ProcessBillWorkflow > Delete", "ProcessIncomingStocks", stockHistories, err)
 			return err
