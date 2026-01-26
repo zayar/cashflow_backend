@@ -279,7 +279,33 @@ func CreateBill(tx *gorm.DB, logger *logrus.Logger, recordId int, recordType str
 		return 0, nil, 0, nil, err
 	}
 	for _, billDetail := range bill.Details {
-		amount, ok := detailAccounts[billDetail.DetailAccountId]
+		// Defensive: Bills sometimes arrive with missing DetailAccountId (0).
+		// Invoices/Credit Notes already guard this; Bills should too, otherwise journal creation can fail
+		// and the UI will show "No journal entries available".
+		detailAccountId := billDetail.DetailAccountId
+		if detailAccountId == 0 {
+			// Prefer product-derived accounts when possible.
+			if billDetail.ProductId > 0 {
+				productDetail, derr := GetProductDetail(tx, billDetail.ProductId, billDetail.ProductType)
+				if derr != nil {
+					config.LogError(logger, "BillWorkflow.go", "CreateBill", "GetProductDetail", billDetail, derr)
+					return 0, nil, 0, nil, derr
+				}
+				// Inventory purchases should debit inventory asset when available.
+				if productDetail.InventoryAccountId > 0 {
+					detailAccountId = productDetail.InventoryAccountId
+				} else if productDetail.PurchaseAccountId > 0 {
+					// Fallback for non-inventory products: use purchase/expense account.
+					detailAccountId = productDetail.PurchaseAccountId
+				}
+			}
+			// Final fallback: Other Expenses (keeps posting possible instead of dropping journal).
+			if detailAccountId == 0 {
+				detailAccountId = systemAccounts[models.AccountCodeOtherExpenses]
+			}
+		}
+
+		amount, ok := detailAccounts[detailAccountId]
 		if !ok {
 			amount = decimal.NewFromInt(0)
 		}
@@ -288,7 +314,7 @@ func CreateBill(tx *gorm.DB, logger *logrus.Logger, recordId int, recordType str
 		} else {
 			amount = amount.Add(billDetail.DetailTotalAmount.Add(billDetail.DetailDiscountAmount))
 		}
-		detailAccounts[billDetail.DetailAccountId] = amount
+		detailAccounts[detailAccountId] = amount
 
 		if billDetail.ProductId > 0 &&
 			CheckIfStockNeedsInventoryTracking(tx, billDetail.ProductId, billDetail.ProductType) {
