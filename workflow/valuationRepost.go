@@ -83,13 +83,18 @@ func repostJournalWithValuationDeltas(
 			existingAccountIds = append(existingAccountIds, t.AccountId)
 		}
 	} else {
-		var err error
-		aj, _, existingAccountIds, err = GetExistingAccountJournal(tx, refId, refType)
-		if err != nil {
+		// CRITICAL: always scope by business_id. reference_id is not globally unique.
+		var one models.AccountJournal
+		if err := tx.
+			Preload("AccountTransactions").
+			Where("business_id = ? AND reference_id = ? AND reference_type = ? AND is_reversal = 0 AND reversed_by_journal_id IS NULL", businessId, refId, refType).
+			Order("id DESC").
+			First(&one).Error; err != nil {
 			return 0, nil, err
 		}
-		if aj == nil {
-			return 0, nil, fmt.Errorf("repost journal: active journal not found")
+		aj = &one
+		for _, t := range aj.AccountTransactions {
+			existingAccountIds = append(existingAccountIds, t.AccountId)
 		}
 	}
 
@@ -169,6 +174,34 @@ func repostJournalWithValuationDeltas(
 			IsInventoryValuation: &isValTrue,
 			IsTransferIn:         transferInFilter,
 		})
+	}
+
+	// Normalize: never allow negative debit/credit in persisted journals.
+	// If a delta reduces a debit/credit below zero, flip the sign to the opposite side.
+	normalize := func(d, c decimal.Decimal) (decimal.Decimal, decimal.Decimal) {
+		if d.IsNegative() {
+			c = c.Add(d.Abs())
+			d = decimal.Zero
+		}
+		if c.IsNegative() {
+			d = d.Add(c.Abs())
+			c = decimal.Zero
+		}
+		// Net out if both sides are positive (keep one side only).
+		if d.GreaterThan(decimal.Zero) && c.GreaterThan(decimal.Zero) {
+			if d.GreaterThanOrEqual(c) {
+				d = d.Sub(c)
+				c = decimal.Zero
+			} else {
+				c = c.Sub(d)
+				d = decimal.Zero
+			}
+		}
+		return d, c
+	}
+	for i := range newTxs {
+		newTxs[i].BaseDebit, newTxs[i].BaseCredit = normalize(newTxs[i].BaseDebit, newTxs[i].BaseCredit)
+		newTxs[i].ForeignDebit, newTxs[i].ForeignCredit = normalize(newTxs[i].ForeignDebit, newTxs[i].ForeignCredit)
 	}
 
 	// Reverse the current active journal.

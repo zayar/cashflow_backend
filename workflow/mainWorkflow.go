@@ -108,8 +108,18 @@ func resolveValuationCounterAccount(
 	var refType models.AccountReferenceType
 	switch refStockType {
 	case models.StockReferenceTypeInventoryAdjustmentQuantity:
+		// Prefer the explicitly selected adjustment account (avoids mistakenly using product COGS).
+		var accId int
+		if err := tx.Raw("SELECT account_id FROM inventory_adjustments WHERE id = ? LIMIT 1", refId).Scan(&accId).Error; err == nil && accId > 0 {
+			return accId, nil
+		}
 		refType = models.AccountReferenceTypeInventoryAdjustmentQuantity
 	case models.StockReferenceTypeInventoryAdjustmentValue:
+		// Prefer the explicitly selected adjustment account (avoids mistakenly using product COGS).
+		var accId int
+		if err := tx.Raw("SELECT account_id FROM inventory_adjustments WHERE id = ? LIMIT 1", refId).Scan(&accId).Error; err == nil && accId > 0 {
+			return accId, nil
+		}
 		refType = models.AccountReferenceTypeInventoryAdjustmentValue
 	default:
 		return 0, nil
