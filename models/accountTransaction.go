@@ -181,16 +181,16 @@ func GetAccountJournalTransactions(ctx context.Context, referenceId int, referen
 	// CRITICAL: Only return transactions from the active (non-reversed) journal.
 	// After schema update, we must filter for is_reversal = false AND reversed_by_journal_id IS NULL
 	// to ensure we only get the current active journal entry, not reversals or inactive ones.
+	// Use INNER JOIN to ensure we only return transactions that actually exist.
 	sql := `
 		SELECT
-	    at.account_id,
-	    at.base_currency_id,
-	    at.branch_id,
-	    at.base_debit,
-	    at.base_credit
+	    at.account_id AS account_id,
+	    at.branch_id AS branch_id,
+	    at.base_debit AS base_debit,
+	    at.base_credit AS base_credit
 	FROM
 	    account_journals AS aj
-	        LEFT JOIN
+	        INNER JOIN
 	    account_transactions at ON aj.id = at.journal_id
 	WHERE
 	    aj.business_id = ?
@@ -198,6 +198,7 @@ func GetAccountJournalTransactions(ctx context.Context, referenceId int, referen
 	        AND aj.reference_id = ?
 	        AND aj.is_reversal = false
 	        AND aj.reversed_by_journal_id IS NULL
+	ORDER BY at.id
 	`
 	args := []interface{}{businessId, referenceType, referenceId}
 	if accountId != nil && *accountId > 0 {
