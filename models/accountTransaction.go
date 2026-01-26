@@ -197,14 +197,14 @@ func GetAccountJournalTransactions(ctx context.Context, referenceId int, referen
 	        AND aj.reference_type = ?
 	        AND aj.reference_id = ?
 	        AND aj.is_reversal = false
-	        AND aj.reversed_by_journal_id IS NULL
-	ORDER BY at.id
+	        AND (aj.reversed_by_journal_id IS NULL OR aj.reversed_by_journal_id = 0)
 	`
 	args := []interface{}{businessId, referenceType, referenceId}
 	if accountId != nil && *accountId > 0 {
 		sql += " AND at.account_id = ?"
 		args = append(args, *accountId)
 	}
+	sql += " ORDER BY at.id"
 	if err := db.WithContext(ctx).Raw(sql, args...).Scan(&results).Error; err != nil {
 		return nil, err
 	}
