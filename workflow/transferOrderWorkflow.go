@@ -20,6 +20,7 @@ func ProcessTransferOrderWorkflow(tx *gorm.DB, logger *logrus.Logger, msg config
 	var accountJournalId int
 	var accountIds []int
 	var foreignCurrencyId int
+	var stockHistories []*models.StockHistory
 	business, err := models.GetBusinessById2(tx, msg.BusinessId)
 	if err != nil {
 		config.LogError(logger, "TransferOrderWorkflow.go", "ProcessTransferOrderWorkflow", "GetBusiness", msg.BusinessId, err)
@@ -62,6 +63,64 @@ func ProcessTransferOrderWorkflow(tx *gorm.DB, logger *logrus.Logger, msg config
 			err = UpdateBalances(tx, logger, msg.BusinessId, business.BaseCurrencyId, destinationWarehouse.BranchId, accountIds, transferOrder.TransferDate, foreignCurrencyId)
 			if err != nil {
 				config.LogError(logger, "TransferOrderWorkflow.go", "ProcessTransferOrderWorkflow > Create", "UpdateBalancesOfDestinationBranch", nil, err)
+				return err
+			}
+		}
+	} else if msg.Action == string(models.PubSubMessageActionDelete) {
+		var oldTransferOrder models.TransferOrder
+		err := json.Unmarshal([]byte(msg.OldObj), &oldTransferOrder)
+		if err != nil {
+			config.LogError(logger, "TransferOrderWorkflow.go", "ProcessTransferOrderWorkflow > Delete", "Unmarshal msg.OldObj", msg.OldObj, err)
+			return err
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		ctx = context.WithValue(ctx, utils.ContextKeyBusinessId, oldTransferOrder.BusinessId)
+		sourceWarehouse, err := models.GetWarehouse(ctx, oldTransferOrder.SourceWarehouseId)
+		if err != nil {
+			config.LogError(logger, "TransferOrderWorkflow.go", "ProcessTransferOrderWorkflow > Delete", "GetSourceWarehouse", oldTransferOrder.SourceWarehouseId, err)
+			return err
+		}
+		destinationWarehouse, err := models.GetWarehouse(ctx, oldTransferOrder.DestinationWarehouseId)
+		if err != nil {
+			config.LogError(logger, "TransferOrderWorkflow.go", "ProcessTransferOrderWorkflow > Delete", "GetDestinationWarehouse", oldTransferOrder.DestinationWarehouseId, err)
+			return err
+		}
+
+		accountJournalId, accountIds, foreignCurrencyId, stockHistories, err = DeleteTransferOrder(tx, logger, msg.ID, msg.ReferenceType, msg.BusinessId, *business, oldTransferOrder)
+		if err != nil {
+			config.LogError(logger, "TransferOrderWorkflow.go", "ProcessTransferOrderWorkflow > Delete", "DeleteTransferOrder", nil, err)
+			return err
+		}
+		valuationAccountIds, err := ProcessStockHistories(tx, logger, stockHistories)
+		if err != nil {
+			if scope, ok := parseFifoInsufficientScope(err); ok {
+				if rerr := rebuildInventoryForScope(tx, logger, msg.BusinessId, scope, oldTransferOrder.TransferDate); rerr == nil {
+					valuationAccountIds, err = ProcessStockHistories(tx, logger, stockHistories)
+				}
+			}
+		}
+		if err != nil {
+			config.LogError(logger, "TransferOrderWorkflow.go", "ProcessTransferOrderWorkflow > Delete", "ProcessStockHistories", stockHistories, err)
+			return err
+		}
+		if len(valuationAccountIds) > 0 {
+			for _, accId := range valuationAccountIds {
+				if !slices.Contains(accountIds, accId) {
+					accountIds = append(accountIds, accId)
+				}
+			}
+		}
+		err = UpdateBalances(tx, logger, msg.BusinessId, business.BaseCurrencyId, sourceWarehouse.BranchId, accountIds, oldTransferOrder.TransferDate, foreignCurrencyId)
+		if err != nil {
+			config.LogError(logger, "TransferOrderWorkflow.go", "ProcessTransferOrderWorkflow > Delete", "UpdateBalances", nil, err)
+			return err
+		}
+		if sourceWarehouse.BranchId != destinationWarehouse.BranchId {
+			err = UpdateBalances(tx, logger, msg.BusinessId, business.BaseCurrencyId, destinationWarehouse.BranchId, accountIds, oldTransferOrder.TransferDate, foreignCurrencyId)
+			if err != nil {
+				config.LogError(logger, "TransferOrderWorkflow.go", "ProcessTransferOrderWorkflow > Delete", "UpdateBalancesOfDestinationBranch", nil, err)
 				return err
 			}
 		}
@@ -331,4 +390,55 @@ func CreateTransferOrder(tx *gorm.DB, logger *logrus.Logger, recordId int, recor
 
 	return accJournal.ID, accountIds, foreignCurrencyId, nil
 
+}
+
+// DeleteTransferOrder reverses ledger + journals for a transfer order.
+// It appends reversal stock_histories rows and creates reversal account journals.
+func DeleteTransferOrder(tx *gorm.DB, logger *logrus.Logger, recordId int, recordType string, businessId string, business models.Business, oldTransferOrder models.TransferOrder) (int, []int, int, []*models.StockHistory, error) {
+	foreignCurrencyId := business.BaseCurrencyId
+
+	// Reverse ALL active journals for this transfer order (source + destination).
+	var journals []models.AccountJournal
+	if err := tx.Preload("AccountTransactions").
+		Where("reference_id = ? AND reference_type = ? AND is_reversal = 0 AND reversed_by_journal_id IS NULL", oldTransferOrder.ID, models.AccountReferenceTypeTransferOrder).
+		Find(&journals).Error; err != nil {
+		config.LogError(logger, "TransferOrderWorkflow.go", "DeleteTransferOrder", "FindAccountJournals", oldTransferOrder, err)
+		return 0, nil, 0, nil, err
+	}
+	accountIds := make([]int, 0)
+	reversalID := 0
+	for _, j := range journals {
+		if j.ID == 0 {
+			continue
+		}
+		for _, t := range j.AccountTransactions {
+			if !slices.Contains(accountIds, t.AccountId) {
+				accountIds = append(accountIds, t.AccountId)
+			}
+		}
+		rid, err := ReverseAccountJournal(tx, &j, ReversalReasonTransferOrderVoidUpdate)
+		if err != nil {
+			config.LogError(logger, "TransferOrderWorkflow.go", "DeleteTransferOrder", "ReverseAccountJournal", j, err)
+			return 0, nil, 0, nil, err
+		}
+		if reversalID == 0 {
+			reversalID = rid
+		}
+	}
+
+	// Reverse stock histories (source transfer-out + destination transfer-in).
+	var stockHistories []*models.StockHistory
+	if err := tx.
+		Where("reference_id = ? AND reference_type = ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL", oldTransferOrder.ID, models.StockReferenceTypeTransferOrder).
+		Find(&stockHistories).Error; err != nil {
+		config.LogError(logger, "TransferOrderWorkflow.go", "DeleteTransferOrder", "FindStockHistories", oldTransferOrder, err)
+		return 0, nil, 0, nil, err
+	}
+	stockReversals, err := ReverseStockHistories(tx, stockHistories, ReversalReasonTransferOrderVoidUpdate)
+	if err != nil {
+		config.LogError(logger, "TransferOrderWorkflow.go", "DeleteTransferOrder", "ReverseStockHistories", oldTransferOrder, err)
+		return 0, nil, 0, nil, err
+	}
+
+	return reversalID, accountIds, foreignCurrencyId, stockReversals, nil
 }

@@ -1650,6 +1650,11 @@ func (r *mutationResolver) CreateTransferOrder(ctx context.Context, input models
 	return models.CreateTransferOrder(ctx, &input)
 }
 
+// DeleteTransferOrder is the resolver for the deleteTransferOrder field.
+func (r *mutationResolver) DeleteTransferOrder(ctx context.Context, id int) (*models.TransferOrder, error) {
+	return models.DeleteTransferOrder(ctx, id)
+}
+
 // CreateInventoryAdjustment is the resolver for the createInventoryAdjustment field.
 func (r *mutationResolver) CreateInventoryAdjustment(ctx context.Context, input models.NewInventoryAdjustment) (*models.InventoryAdjustment, error) {
 	// Determinism guard for Value Adjustments:

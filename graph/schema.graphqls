@@ -5194,9 +5194,9 @@ type Mutation {
   # updateTransferOrder(id: ID!, input: NewTransferOrder!): TransferOrder!
   #  @goField(forceResolver: true)
   #  @auth
-  # deleteTransferOrder(id: ID!): TransferOrder!
-  #  @goField(forceResolver: true)
-  #  @auth
+  deleteTransferOrder(id: ID!): TransferOrder!
+    @goField(forceResolver: true)
+    @auth
 
   createInventoryAdjustment(
     input: NewInventoryAdjustment!

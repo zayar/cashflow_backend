@@ -536,6 +536,83 @@ func CreateTransferOrder(ctx context.Context, input *NewTransferOrder) (*Transfe
 // 	return result, nil
 // }
 
+// DeleteTransferOrder deletes a transfer order and publishes a delete message so
+// the worker can reverse ledger + journals (append-only).
+func DeleteTransferOrder(ctx context.Context, id int) (*TransferOrder, error) {
+	businessId, ok := utils.GetBusinessIdFromContext(ctx)
+	if !ok || businessId == "" {
+		return nil, errors.New("business id is required")
+	}
+
+	result, err := utils.FetchModel[TransferOrder](ctx, businessId, id, "Details", "Documents")
+	if err != nil {
+		return nil, err
+	}
+
+	// Preserve old object (with details/documents) for delete outbox message.
+	oldForMsg := *result
+	if len(result.Details) > 0 {
+		oldForMsg.Details = append([]TransferOrderDetail(nil), result.Details...)
+	}
+	if len(result.Documents) > 0 {
+		oldForMsg.Documents = append([]*Document(nil), result.Documents...)
+	}
+
+	db := config.GetDB()
+	tx := db.Begin()
+
+	// Reverse stock summaries if confirmed (cache tables only; ledger is handled by worker delete).
+	if result.CurrentStatus == TransferOrderStatusConfirmed {
+		for _, detailItem := range result.Details {
+			if detailItem.ProductId <= 0 {
+				continue
+			}
+			product, err := GetProductOrVariant(ctx, string(detailItem.ProductType), detailItem.ProductId)
+			if err != nil {
+				tx.Rollback()
+				return nil, err
+			}
+			if product.GetInventoryAccountID() > 0 {
+				// Undo transfer out/in in stock summaries.
+				if err := UpdateStockSummaryTransferQtyOut(tx, result.BusinessId, result.SourceWarehouseId, detailItem.ProductId, string(detailItem.ProductType), detailItem.BatchNumber, detailItem.TransferQty, result.TransferDate); err != nil {
+					tx.Rollback()
+					return nil, err
+				}
+				if err := UpdateStockSummaryTransferQtyIn(tx, result.BusinessId, result.DestinationWarehouseId, detailItem.ProductId, string(detailItem.ProductType), detailItem.BatchNumber, detailItem.TransferQty.Neg(), result.TransferDate); err != nil {
+					tx.Rollback()
+					return nil, err
+				}
+			}
+		}
+	}
+
+	if err := tx.WithContext(ctx).Model(&result).Association("Details").Unscoped().Clear(); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	if err := tx.WithContext(ctx).Delete(&result).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	if result.CurrentStatus == TransferOrderStatusConfirmed {
+		if err := PublishToAccounting(ctx, tx, businessId, result.TransferDate, result.ID, AccountReferenceTypeTransferOrder, nil, &oldForMsg, PubSubMessageActionDelete); err != nil {
+			tx.Rollback()
+			return nil, err
+		}
+	}
+
+	if err := deleteDocuments(ctx, tx, result.Documents); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	if err := tx.Commit().Error; err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
 func GetTransferOrder(ctx context.Context, id int) (*TransferOrder, error) {
 	businessId, ok := utils.GetBusinessIdFromContext(ctx)
 	if !ok || businessId == "" {

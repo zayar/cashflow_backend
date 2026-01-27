@@ -22,5 +22,6 @@ const (
 	ReversalReasonCreditNoteAppliedVoidUpdate      = "Credit note applied void/update"
 	ReversalReasonInventoryAdjustQtyVoidUpdate     = "Inventory adjustment (qty) void/update"
 	ReversalReasonInventoryAdjustValueVoidUpdate   = "Inventory adjustment (value) void/update"
+	ReversalReasonTransferOrderVoidUpdate          = "Transfer order void/update"
 	ReversalReasonInventoryValuationReprice        = "Inventory valuation repricing"
 )
