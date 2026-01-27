@@ -1653,7 +1653,12 @@ func ensureNonNegativeForKeys(tx *gorm.DB, logger *logrus.Logger, stockHistories
 				SELECT
 					SUM(qty) OVER (
 						PARTITION BY warehouse_id, product_id, product_type
-						ORDER BY stock_date, cumulative_sequence, id
+						-- IMPORTANT: do not rely on cumulative_sequence for ordering.
+						-- After migrations (e.g. no-batch flattening), legacy rows may have per-batch cumulative_sequence
+						-- which can create a false negative running balance and block posting.
+						-- Use the same canonical order as closing-balance recompute:
+						-- incoming first (is_outgoing=0), then outgoing (is_outgoing=1), then id.
+						ORDER BY stock_date, COALESCE(is_outgoing, 0), id
 						ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
 					) AS running_qty
 				FROM stock_histories
