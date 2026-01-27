@@ -1904,6 +1904,30 @@ func ProcessOutgoingStocks(tx *gorm.DB, logger *logrus.Logger, stockHistories []
 	if len(stockHistories) <= 0 {
 		return accountIds, nil
 	}
+	// Guardrail for backdated outgoing: only revalue outgoing rows up to the
+	// max stock_date in the batch being processed. This prevents future
+	// transactions from blocking backdated invoices with false FIFO shortages.
+	type key struct {
+		WarehouseId int
+		ProductId   int
+		ProductType models.ProductType
+		BatchNumber string
+	}
+	maxDateByKey := make(map[key]time.Time)
+	for _, sh := range stockHistories {
+		if sh == nil {
+			continue
+		}
+		k := key{
+			WarehouseId: sh.WarehouseId,
+			ProductId:   sh.ProductId,
+			ProductType: sh.ProductType,
+			BatchNumber: sh.BatchNumber,
+		}
+		if existing, ok := maxDateByKey[k]; !ok || sh.StockDate.After(existing) {
+			maxDateByKey[k] = sh.StockDate
+		}
+	}
 
 	lastStockHistoriesAll, err := getLastStockHistories(tx, stockHistories, true)
 	if err != nil {
@@ -1968,6 +1992,19 @@ func ProcessOutgoingStocks(tx *gorm.DB, logger *logrus.Logger, stockHistories []
 		if err != nil {
 			config.LogError(logger, "MainWorkflow.go", "ProcessOutgoingStocks", "GetRemainingStockHistoriesByDate", stockHistory, err)
 			return accountIds, err
+		}
+		if maxDate, ok := maxDateByKey[key{WarehouseId: stockHistory.WarehouseId, ProductId: stockHistory.ProductId, ProductType: stockHistory.ProductType, BatchNumber: stockHistory.BatchNumber}]; ok {
+			filtered := make([]*models.StockHistory, 0, len(remainingOutgoingStockHistories))
+			for _, out := range remainingOutgoingStockHistories {
+				if out == nil {
+					continue
+				}
+				if out.StockDate.After(maxDate) {
+					continue
+				}
+				filtered = append(filtered, out)
+			}
+			remainingOutgoingStockHistories = filtered
 		}
 		remainingIncomingStockHistories, remainingOutgoingStockHistories = FilterStockHistories(remainingIncomingStockHistories, remainingOutgoingStockHistories)
 
