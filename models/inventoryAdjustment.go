@@ -647,6 +647,13 @@ func DeleteInventoryAdjustment(ctx context.Context, id int) (*InventoryAdjustmen
 	if err != nil {
 		return nil, err
 	}
+	// IMPORTANT: preserve the full pre-delete object for Pub/Sub delete processing.
+	// The workflow delete handler needs Details to create reversal stock histories/journals.
+	// GORM Association("Details").Clear() may remove those rows before we serialize result into OldObj,
+	// causing delete to "not work" (inventory movement remains).
+	oldForMsg := *result
+	oldForMsg.Details = append([]InventoryAdjustmentDetail(nil), result.Details...)
+	oldForMsg.Documents = append([]*Document(nil), result.Documents...)
 
 	db := config.GetDB()
 	tx := db.Begin()
@@ -700,13 +707,13 @@ func DeleteInventoryAdjustment(ctx context.Context, id int) (*InventoryAdjustmen
 	}
 
 	if result.AdjustmentType == InventoryAdjustmentTypeQuantity {
-		err = PublishToAccounting(ctx, tx, businessId, result.AdjustmentDate, result.ID, AccountReferenceTypeInventoryAdjustmentQuantity, nil, result, PubSubMessageActionDelete)
+		err = PublishToAccounting(ctx, tx, businessId, result.AdjustmentDate, result.ID, AccountReferenceTypeInventoryAdjustmentQuantity, nil, &oldForMsg, PubSubMessageActionDelete)
 		if err != nil {
 			tx.Rollback()
 			return nil, err
 		}
 	} else {
-		err = PublishToAccounting(ctx, tx, businessId, result.AdjustmentDate, result.ID, AccountReferenceTypeInventoryAdjustmentValue, nil, result, PubSubMessageActionDelete)
+		err = PublishToAccounting(ctx, tx, businessId, result.AdjustmentDate, result.ID, AccountReferenceTypeInventoryAdjustmentValue, nil, &oldForMsg, PubSubMessageActionDelete)
 		if err != nil {
 			tx.Rollback()
 			return nil, err
