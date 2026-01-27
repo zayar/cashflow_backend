@@ -415,23 +415,43 @@ func GetRemainingStockHistoriesByCumulativeQty(tx *gorm.DB, warehouseId int, pro
 	} else {
 		// Incoming: if request batch is empty, allow matching ANY batch (fungible consumption).
 		// This fixes "insufficient FIFO layers" when stock has batch but invoice doesn't.
+		//
+		// IMPORTANT:
+		// We must NOT use per-batch cumulative_incoming_qty when batchNumber == "" because incoming
+		// stock may be split across multiple batches. Comparing a global consumed qty to a per-batch
+		// cumulative causes false shortages (e.g. UI shows 5 across batches, but no single batch has >4).
 		if batchNumber == "" {
-			if qty.IsZero() {
-				err = tx.Raw(`
-					SELECT * FROM stock_histories
-					WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
-						AND warehouse_id = ? AND product_id = ? AND product_type = ? AND is_outgoing = false AND cumulative_incoming_qty >= ?
-						AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
-					ORDER BY stock_date, is_outgoing, id ASC;
-					`, warehouseId, warehouseId, productId, productType, qty).Find(&remaininigStockHistories).Error
-			} else {
-				err = tx.Raw(`
-					SELECT * FROM stock_histories
-					WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
-						AND warehouse_id = ? AND product_id = ? AND product_type = ? AND is_outgoing = false AND cumulative_incoming_qty > ?
-						AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
-					ORDER BY stock_date, is_outgoing, id ASC;
-					`, warehouseId, warehouseId, productId, productType, qty).Find(&remaininigStockHistories).Error
+			var allIncoming []*models.StockHistory
+			err = tx.Raw(`
+				SELECT * FROM stock_histories
+				WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
+					AND warehouse_id = ? AND product_id = ? AND product_type = ? AND is_outgoing = false
+					AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
+				ORDER BY stock_date, is_outgoing, id ASC;
+				`, warehouseId, warehouseId, productId, productType).Find(&allIncoming).Error
+			if err != nil {
+				return nil, err
+			}
+			// Skip already-consumed quantity across ALL batches in chronological order.
+			consumed := qty
+			for _, sh := range allIncoming {
+				if consumed.LessThanOrEqual(decimal.Zero) {
+					remaininigStockHistories = append(remaininigStockHistories, sh)
+					continue
+				}
+				if sh.Qty.LessThanOrEqual(decimal.Zero) {
+					// Defensive: ignore non-positive incoming rows.
+					continue
+				}
+				if consumed.GreaterThanOrEqual(sh.Qty) {
+					consumed = consumed.Sub(sh.Qty)
+					continue
+				}
+				// Partially consumed this layer: return the remaining quantity on it.
+				cpy := *sh
+				cpy.Qty = sh.Qty.Sub(consumed)
+				consumed = decimal.Zero
+				remaininigStockHistories = append(remaininigStockHistories, &cpy)
 			}
 		} else {
 			// Specific batch requested: match strictly.
@@ -473,13 +493,35 @@ func GetRemainingStockHistoriesByCumulativeQtyUntilDate(tx *gorm.DB, warehouseId
 			`, warehouseId, warehouseId, productId, productType, batchNumber, qty, stockDate).Find(&remaininigStockHistories).Error
 	} else {
 		if batchNumber == "" {
+			var allIncoming []*models.StockHistory
 			err = tx.Raw(`
 				SELECT * FROM stock_histories
 				WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
-					AND warehouse_id = ? AND product_id = ? AND product_type = ? AND is_outgoing = false AND cumulative_incoming_qty > ? AND stock_date <= ?
+					AND warehouse_id = ? AND product_id = ? AND product_type = ? AND is_outgoing = false AND stock_date <= ?
 					AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
 				ORDER BY stock_date, is_outgoing, id ASC;
-				`, warehouseId, warehouseId, productId, productType, qty, stockDate).Find(&remaininigStockHistories).Error
+				`, warehouseId, warehouseId, productId, productType, stockDate).Find(&allIncoming).Error
+			if err != nil {
+				return nil, err
+			}
+			consumed := qty
+			for _, sh := range allIncoming {
+				if consumed.LessThanOrEqual(decimal.Zero) {
+					remaininigStockHistories = append(remaininigStockHistories, sh)
+					continue
+				}
+				if sh.Qty.LessThanOrEqual(decimal.Zero) {
+					continue
+				}
+				if consumed.GreaterThanOrEqual(sh.Qty) {
+					consumed = consumed.Sub(sh.Qty)
+					continue
+				}
+				cpy := *sh
+				cpy.Qty = sh.Qty.Sub(consumed)
+				consumed = decimal.Zero
+				remaininigStockHistories = append(remaininigStockHistories, &cpy)
+			}
 		} else {
 			err = tx.Raw(`
 				SELECT * FROM stock_histories
