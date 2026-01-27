@@ -888,7 +888,7 @@ type StockOpeningBalanceDetail {
   productId: Int!
   productName: String
   productType: String!
-  batchNumber: String!
+  batchNumber: String
   qty: Decimal!
   unitValue: Decimal!
   totalValue: Decimal!

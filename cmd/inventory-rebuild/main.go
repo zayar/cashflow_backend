@@ -19,10 +19,11 @@ func main() {
 	productID := flag.Int("product-id", 0, "Optional: product id")
 	productType := flag.String("product-type", "S", "Optional: product type (S/V)")
 	warehouseID := flag.Int("warehouse-id", 0, "Optional: warehouse id")
-	batchNumber := flag.String("batch", "", "Optional: batch number (default empty)")
+	batchNumber := flag.String("batch", "", "Ignored (no-batch mode): legacy batch number")
 	fromDateStr := flag.String("from", "", "Optional: rebuild from date (YYYY-MM-DD). Defaults to earliest ledger date for the key.")
 	continueOnError := flag.Bool("continue-on-error", false, "Skip failing keys and continue rebuilding others")
 	flag.Parse()
+	_ = batchNumber // legacy flag (kept for compatibility)
 
 	if strings.TrimSpace(*businessID) == "" {
 		fmt.Fprintln(os.Stderr, "--business-id is required")
@@ -59,8 +60,8 @@ func main() {
 			db.Raw(`
 				SELECT COALESCE(MIN(stock_date), NOW()) AS start_date
 				FROM stock_histories
-				WHERE business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ?
-			`, *businessID, *warehouseID, *productID, models.ProductType(*productType), *batchNumber).Scan(&start)
+				WHERE business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ?
+			`, *businessID, *warehouseID, *productID, models.ProductType(*productType)).Scan(&start)
 		}
 		scopes = append(scopes, struct {
 			WarehouseId int
@@ -68,7 +69,7 @@ func main() {
 			ProductType models.ProductType
 			Batch       string
 			StartDate   time.Time
-		}{*warehouseID, *productID, models.ProductType(*productType), strings.TrimSpace(*batchNumber), start})
+		}{*warehouseID, *productID, models.ProductType(*productType), "", start})
 	} else {
 		// Discover all keys for the business.
 		type row struct {
@@ -80,10 +81,10 @@ func main() {
 		}
 		var rows []row
 		if err := db.Raw(`
-			SELECT warehouse_id, product_id, product_type, COALESCE(batch_number,'') AS batch, MIN(stock_date) AS start_date
+			SELECT warehouse_id, product_id, product_type, '' AS batch, MIN(stock_date) AS start_date
 			FROM stock_histories
 			WHERE business_id = ?
-			GROUP BY warehouse_id, product_id, product_type, COALESCE(batch_number,'')
+			GROUP BY warehouse_id, product_id, product_type
 		`, *businessID).Scan(&rows).Error; err != nil {
 			fmt.Fprintf(os.Stderr, "discover scopes: %v\n", err)
 			os.Exit(1)
@@ -101,10 +102,10 @@ func main() {
 
 	for _, s := range scopes {
 		fmt.Printf("Rebuilding business=%s warehouse=%d product=%d type=%s batch=%q from=%s\n",
-			*businessID, s.WarehouseId, s.ProductId, string(s.ProductType), s.Batch, s.StartDate.Format(time.RFC3339))
+			*businessID, s.WarehouseId, s.ProductId, string(s.ProductType), "", s.StartDate.Format(time.RFC3339))
 		if err := db.Transaction(func(tx *gorm.DB) error {
 			_, err := workflow.RebuildInventoryForItemWarehouseFromDate(
-				tx, logger, *businessID, s.WarehouseId, s.ProductId, s.ProductType, s.Batch, s.StartDate,
+				tx, logger, *businessID, s.WarehouseId, s.ProductId, s.ProductType, "", s.StartDate,
 			)
 			if err != nil {
 				return err

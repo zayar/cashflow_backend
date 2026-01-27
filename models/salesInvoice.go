@@ -291,6 +291,10 @@ func stockSummaryOnHand(tx *gorm.DB, businessId string, warehouseId int, product
 	if tx == nil {
 		return decimal.Zero, errors.New("tx is nil")
 	}
+	// No-batch mode: ignore any provided batch number.
+	if config.NoBatchMode() {
+		batchTrim = ""
+	}
 	var onHand decimal.Decimal
 	if strings.TrimSpace(batchTrim) == "" {
 		err := tx.Raw(`
@@ -319,6 +323,12 @@ func CreateSalesInvoice(ctx context.Context, input *NewSalesInvoice) (*SalesInvo
 	// Defensive: GraphQL input may omit optional booleans. Avoid nil deref panics.
 	if input.IsTaxInclusive == nil {
 		return nil, errors.New("is_tax_inclusive is required")
+	}
+	// No-batch mode: force all invoice lines to be unbatched.
+	if config.NoBatchMode() {
+		for i := range input.Details {
+			input.Details[i].BatchNumber = ""
+		}
 	}
 
 	// IMPORTANT (correctness): if callers request "Confirmed" on create, we still create as Draft
@@ -709,6 +719,12 @@ func UpdateSalesInvoice(ctx context.Context, invoiceId int, updatedInvoice *NewS
 	businessId, ok := utils.GetBusinessIdFromContext(ctx)
 	if !ok || businessId == "" {
 		return nil, errors.New("business id is required")
+	}
+	// No-batch mode: force all invoice lines to be unbatched.
+	if config.NoBatchMode() {
+		for i := range updatedInvoice.Details {
+			updatedInvoice.Details[i].BatchNumber = ""
+		}
 	}
 
 	// validate SalesInvoice

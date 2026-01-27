@@ -1,8 +1,10 @@
 package models
 
 import (
+	"strings"
 	"time"
 
+	"github.com/mmdatafocus/books_backend/config"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
@@ -52,6 +54,13 @@ func (sh *StockHistory) BeforeSave(tx *gorm.DB) error {
 	_ = tx // signature required by gorm; tx may be nil in tests
 	if sh == nil {
 		return nil
+	}
+	// No-batch mode: enforce batch_number is always empty in the inventory ledger.
+	// This makes it impossible for any downstream query to behave per-batch.
+	if config.NoBatchMode() {
+		sh.BatchNumber = ""
+	} else {
+		sh.BatchNumber = strings.TrimSpace(sh.BatchNumber)
 	}
 	if sh.IsOutgoing == nil {
 		b := false

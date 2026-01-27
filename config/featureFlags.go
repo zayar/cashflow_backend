@@ -37,3 +37,21 @@ func UseStockCommandsFor(doc string) bool {
 	}
 	return false
 }
+
+// NoBatchMode disables lot/batch tracking end-to-end.
+//
+// When enabled, the backend must treat all inventory as fungible across batches:
+// - All incoming/outgoing docs are normalized to batchNumber=""
+// - All stock calculations and FIFO/closing balances ignore batch_number
+//
+// Set via env:
+// - NO_BATCH_MODE=true
+//
+// Default: true (this codebase runs in no-batch mode unless explicitly disabled).
+func NoBatchMode() bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv("NO_BATCH_MODE")))
+	if raw == "" {
+		return true
+	}
+	return raw == "1" || raw == "true" || raw == "yes" || raw == "y"
+}

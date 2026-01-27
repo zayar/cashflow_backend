@@ -273,6 +273,11 @@ func ValidateTransactionLock(ctx context.Context, transactionDate time.Time, bus
 }
 
 func ValidateValueAdjustment(ctx context.Context, businessId string, transactionDate time.Time, productType ProductType, productId int, batchNumber *string, sameday ...bool) error {
+	// No-batch mode: inventory adjustments must not be partitioned by batch.
+	// Treat any incoming batchNumber as empty to avoid per-batch behavior.
+	if config.NoBatchMode() {
+		batchNumber = nil
+	}
 	db := config.GetDB()
 	sqlTemp := `
 	SELECT
@@ -413,6 +418,11 @@ func ValidateProductId(ctx context.Context, businessId string, productId int, pr
 
 // return current stock on hand (-1 if inventoryAccountId is zero or input product type)
 func GetProductStock(tx *gorm.DB, ctx context.Context, businessId string, warehouseId int, batchNumber string, productType ProductType, productId int) (decimal.Decimal, error) {
+	// No-batch mode: always treat inventory as fungible across batches.
+	// Ignore the provided batchNumber entirely.
+	if config.NoBatchMode() {
+		batchNumber = ""
+	}
 
 	if productType == ProductTypeInput {
 		return decimal.NewFromInt(-1), nil
@@ -441,23 +451,12 @@ func GetProductStock(tx *gorm.DB, ctx context.Context, businessId string, wareho
 	default:
 		return currentStock, errors.New("invalid product type")
 	}
-	// Batch-empty mode: treat batches as fungible when checking on-hand.
-	// This avoids false negatives when incoming stock is batch-tracked but outgoing docs omit batch_number,
-	// which can make the batch_number='' summary row negative even though total stock across batches is positive.
-	if batchNumber == "" {
-		if err := dbCtx.
-			Where("product_id = ? AND warehouse_id = ?", productId, warehouseId).
-			Select("COALESCE(SUM(current_qty), 0)").
-			Scan(&currentStock).Error; err != nil {
-			return currentStock, err
-		}
-	} else {
-		if err := dbCtx.
-			Where("product_id = ? AND warehouse_id = ? AND batch_number = ?", productId, warehouseId, batchNumber).
-			Select("current_qty").
-			Scan(&currentStock).Error; err != nil {
-			return currentStock, err
-		}
+	// In no-batch mode (and as the default behavior in this system), always aggregate across all batches.
+	if err := dbCtx.
+		Where("product_id = ? AND warehouse_id = ?", productId, warehouseId).
+		Select("COALESCE(SUM(current_qty), 0)").
+		Scan(&currentStock).Error; err != nil {
+		return currentStock, err
 	}
 
 	// Only error if the computed on-hand is negative.

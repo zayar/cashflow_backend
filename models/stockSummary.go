@@ -34,6 +34,10 @@ type StockSummary struct {
 }
 
 func FirstOrCreateStockSummary(tx *gorm.DB, businessId string, warehouseId int, productId int, productType string, batchNumber string) (*StockSummary, bool, error) {
+	// No-batch mode: ignore any provided batch number.
+	if config.NoBatchMode() {
+		batchNumber = ""
+	}
 	isNew := false
 	stockSummary := StockSummary{
 		BusinessId:  businessId,
@@ -61,16 +65,23 @@ func FirstOrCreateStockSummary(tx *gorm.DB, businessId string, warehouseId int, 
 
 func BulkLockStockSummary(tx *gorm.DB, businessId string, warehouseId int, fieldValues *utils.DetailFieldValues) error {
 	var stockSummary []StockSummary
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("business_id = ? AND product_id IN (?) AND warehouse_id = ? AND product_type IN (?) AND batch_number IN (?)",
-			businessId, fieldValues.ProductIDs, warehouseId, fieldValues.ProductTypes, fieldValues.BatchNumbers).
-		Find(&stockSummary).Error; err != nil {
+	q := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("business_id = ? AND product_id IN (?) AND warehouse_id = ? AND product_type IN (?)",
+			businessId, fieldValues.ProductIDs, warehouseId, fieldValues.ProductTypes)
+	// No-batch mode: do not lock per-batch rows.
+	if !config.NoBatchMode() {
+		q = q.Where("batch_number IN (?)", fieldValues.BatchNumbers)
+	}
+	if err := q.Find(&stockSummary).Error; err != nil {
 		return err
 	}
 	return nil
 }
 
 func UpdateStockSummaryOrderQty(tx *gorm.DB, businessId string, warehouseId int, productId int, productType string, batchNumber string, quantity decimal.Decimal, date time.Time) error {
+	if config.NoBatchMode() {
+		batchNumber = ""
+	}
 	if productId > 0 {
 		stockSummary, _, err := FirstOrCreateStockSummary(tx, businessId, warehouseId, productId, productType, batchNumber)
 		if err != nil {
@@ -96,6 +107,9 @@ func UpdateStockSummaryOrderQty(tx *gorm.DB, businessId string, warehouseId int,
 // UpdateStockSummaryOpeningQty applies migration/opening stock quantities.
 // This keeps stock_summaries and stock_summary_daily_balances consistent with stock_histories opening stock postings.
 func UpdateStockSummaryOpeningQty(tx *gorm.DB, businessId string, warehouseId int, productId int, productType string, batchNumber string, quantity decimal.Decimal, date time.Time) error {
+	if config.NoBatchMode() {
+		batchNumber = ""
+	}
 	if productId > 0 {
 		stockSummary, isNew, err := FirstOrCreateStockSummary(tx, businessId, warehouseId, productId, productType, batchNumber)
 		if err != nil {
@@ -121,6 +135,9 @@ func UpdateStockSummaryOpeningQty(tx *gorm.DB, businessId string, warehouseId in
 }
 
 func UpdateStockSummaryReceivedQty(tx *gorm.DB, businessId string, warehouseId int, productId int, productType string, batchNumber string, quantity decimal.Decimal, date time.Time) error {
+	if config.NoBatchMode() {
+		batchNumber = ""
+	}
 	if productId > 0 {
 		stockSummary, isNew, err := FirstOrCreateStockSummary(tx, businessId, warehouseId, productId, productType, batchNumber)
 		if err != nil {
@@ -145,6 +162,9 @@ func UpdateStockSummaryReceivedQty(tx *gorm.DB, businessId string, warehouseId i
 }
 
 func UpdateStockSummaryCommittedQty(tx *gorm.DB, businessId string, warehouseId int, productId int, productType string, batchNumber string, quantity decimal.Decimal, date time.Time) error {
+	if config.NoBatchMode() {
+		batchNumber = ""
+	}
 	if productId > 0 {
 		stockSummary, _, err := FirstOrCreateStockSummary(tx, businessId, warehouseId, productId, productType, batchNumber)
 		if err != nil {
@@ -167,6 +187,9 @@ func UpdateStockSummaryCommittedQty(tx *gorm.DB, businessId string, warehouseId 
 }
 
 func UpdateStockSummarySaleQty(tx *gorm.DB, businessId string, warehouseId int, productId int, productType string, batchNumber string, quantity decimal.Decimal, date time.Time) error {
+	if config.NoBatchMode() {
+		batchNumber = ""
+	}
 	if productId > 0 {
 		stockSummary, _, err := FirstOrCreateStockSummary(tx, businessId, warehouseId, productId, productType, batchNumber)
 		if err != nil {
@@ -190,6 +213,9 @@ func UpdateStockSummarySaleQty(tx *gorm.DB, businessId string, warehouseId int, 
 }
 
 func UpdateStockSummaryAdjustedQtyIn(tx *gorm.DB, businessId string, warehouseId int, productId int, productType string, batchNumber string, quantity decimal.Decimal, date time.Time) error {
+	if config.NoBatchMode() {
+		batchNumber = ""
+	}
 	if productId > 0 {
 		stockSummary, _, err := FirstOrCreateStockSummary(tx, businessId, warehouseId, productId, productType, batchNumber)
 		if err != nil {
@@ -213,6 +239,9 @@ func UpdateStockSummaryAdjustedQtyIn(tx *gorm.DB, businessId string, warehouseId
 }
 
 func UpdateStockSummaryAdjustedQtyOut(tx *gorm.DB, businessId string, warehouseId int, productId int, productType string, batchNumber string, quantity decimal.Decimal, date time.Time) error {
+	if config.NoBatchMode() {
+		batchNumber = ""
+	}
 	if productId > 0 {
 		stockSummary, _, err := FirstOrCreateStockSummary(tx, businessId, warehouseId, productId, productType, batchNumber)
 		if err != nil {
@@ -236,6 +265,9 @@ func UpdateStockSummaryAdjustedQtyOut(tx *gorm.DB, businessId string, warehouseI
 }
 
 func UpdateStockSummaryTransferQtyIn(tx *gorm.DB, businessId string, warehouseId int, productId int, productType string, batchNumber string, quantity decimal.Decimal, date time.Time) error {
+	if config.NoBatchMode() {
+		batchNumber = ""
+	}
 	if productId > 0 {
 		stockSummary, _, err := FirstOrCreateStockSummary(tx, businessId, warehouseId, productId, productType, batchNumber)
 		if err != nil {
@@ -259,6 +291,9 @@ func UpdateStockSummaryTransferQtyIn(tx *gorm.DB, businessId string, warehouseId
 }
 
 func UpdateStockSummaryTransferQtyOut(tx *gorm.DB, businessId string, warehouseId int, productId int, productType string, batchNumber string, quantity decimal.Decimal, date time.Time) error {
+	if config.NoBatchMode() {
+		batchNumber = ""
+	}
 	if productId > 0 {
 		stockSummary, _, err := FirstOrCreateStockSummary(tx, businessId, warehouseId, productId, productType, batchNumber)
 		if err != nil {

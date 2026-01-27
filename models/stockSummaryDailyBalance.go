@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mmdatafocus/books_backend/config"
 	"github.com/mmdatafocus/books_backend/utils"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
@@ -31,6 +32,10 @@ type StockSummaryDailyBalance struct {
 }
 
 func UpsertStockSummaryDailyBalance(tx *gorm.DB, businessId string, warehouseId int, productId int, productType string, batchNumber string, quantity decimal.Decimal, date time.Time, fieldType string) error {
+	// No-batch mode: ignore any provided batch number.
+	if config.NoBatchMode() {
+		batchNumber = ""
+	}
 	// dateOnly := date.Truncate(24 * time.Hour)
 	// dateOnly := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
 	business, err := GetBusinessById2(tx, businessId)

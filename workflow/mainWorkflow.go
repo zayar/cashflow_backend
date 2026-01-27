@@ -244,14 +244,12 @@ func getLastStockHistories(tx *gorm.DB, stockHistories []*models.StockHistory, i
 	type CompositeKey struct {
 		ProductId   int
 		ProductType string
-		BatchNumber string
 	}
 	var compositeKeys []CompositeKey
 	for _, sh := range stockHistories {
 		compositeKeys = append(compositeKeys, CompositeKey{
 			ProductId:   sh.ProductId,
 			ProductType: string(sh.ProductType),
-			BatchNumber: sh.BatchNumber,
 		})
 	}
 
@@ -259,8 +257,8 @@ func getLastStockHistories(tx *gorm.DB, stockHistories []*models.StockHistory, i
 	var placeholders []string
 	var params []interface{}
 	for _, key := range compositeKeys {
-		placeholders = append(placeholders, "(?, ?, ?)")
-		params = append(params, key.ProductId, key.ProductType, key.BatchNumber)
+		placeholders = append(placeholders, "(?, ?)")
+		params = append(params, key.ProductId, key.ProductType)
 	}
 	placeholdersStr := strings.Join(placeholders, ",")
 
@@ -269,14 +267,14 @@ func getLastStockHistories(tx *gorm.DB, stockHistories []*models.StockHistory, i
 			WITH LastStockHistories AS (
 				SELECT 
 					*,
-					ROW_NUMBER() OVER (PARTITION BY warehouse_id, product_id, product_type, batch_number ORDER BY stock_date DESC, is_outgoing DESC, id DESC) AS rn
+					ROW_NUMBER() OVER (PARTITION BY warehouse_id, product_id, product_type ORDER BY stock_date DESC, is_outgoing DESC, id DESC) AS rn
 				FROM 
 					stock_histories
 				WHERE 
 					business_id = ?
 					AND warehouse_id = ? 
 					AND stock_date < ? 
-					AND (product_id, product_type, COALESCE(batch_number,'')) IN (`+placeholdersStr+`)
+					AND (product_id, product_type) IN (`+placeholdersStr+`)
 			)
 			SELECT 
 				*
@@ -290,7 +288,7 @@ func getLastStockHistories(tx *gorm.DB, stockHistories []*models.StockHistory, i
 		WITH LastStockHistories AS (
 			SELECT 
 				*,
-				ROW_NUMBER() OVER (PARTITION BY warehouse_id, product_id, product_type, batch_number ORDER BY stock_date DESC, is_outgoing DESC, id DESC) AS rn
+				ROW_NUMBER() OVER (PARTITION BY warehouse_id, product_id, product_type ORDER BY stock_date DESC, is_outgoing DESC, id DESC) AS rn
 			FROM 
 				stock_histories
 			WHERE 
@@ -298,7 +296,7 @@ func getLastStockHistories(tx *gorm.DB, stockHistories []*models.StockHistory, i
 				AND warehouse_id = ? 
 				AND stock_date < ? 
 				AND is_outgoing = ?
-				AND (product_id, product_type, COALESCE(batch_number,'')) IN (`+placeholdersStr+`)
+				AND (product_id, product_type) IN (`+placeholdersStr+`)
 		)
 		SELECT 
 			*
@@ -326,14 +324,12 @@ func getLastStockHistoriesForValueAdjustment(tx *gorm.DB, stockHistories []*mode
 	type CompositeKey struct {
 		ProductId   int
 		ProductType string
-		BatchNumber string
 	}
 	var compositeKeys []CompositeKey
 	for _, sh := range stockHistories {
 		compositeKeys = append(compositeKeys, CompositeKey{
 			ProductId:   sh.ProductId,
 			ProductType: string(sh.ProductType),
-			BatchNumber: sh.BatchNumber,
 		})
 	}
 
@@ -341,8 +337,8 @@ func getLastStockHistoriesForValueAdjustment(tx *gorm.DB, stockHistories []*mode
 	var placeholders []string
 	var params []interface{}
 	for _, key := range compositeKeys {
-		placeholders = append(placeholders, "(?, ?, ?)")
-		params = append(params, key.ProductId, key.ProductType, key.BatchNumber)
+		placeholders = append(placeholders, "(?, ?)")
+		params = append(params, key.ProductId, key.ProductType)
 	}
 	placeholdersStr := strings.Join(placeholders, ",")
 
@@ -351,14 +347,14 @@ func getLastStockHistoriesForValueAdjustment(tx *gorm.DB, stockHistories []*mode
 			WITH LastStockHistories AS (
 				SELECT 
 					*,
-					ROW_NUMBER() OVER (PARTITION BY warehouse_id, product_id, product_type, batch_number ORDER BY stock_date DESC, is_outgoing DESC, id DESC) AS rn
+					ROW_NUMBER() OVER (PARTITION BY warehouse_id, product_id, product_type ORDER BY stock_date DESC, is_outgoing DESC, id DESC) AS rn
 				FROM 
 					stock_histories
 				WHERE 
 					business_id = ?
 					AND warehouse_id = ? 
 					AND stock_date < ? 
-					AND (product_id, product_type, COALESCE(batch_number,'')) IN (`+placeholdersStr+`)
+					AND (product_id, product_type) IN (`+placeholdersStr+`)
 			)
 			SELECT 
 				*
@@ -372,7 +368,7 @@ func getLastStockHistoriesForValueAdjustment(tx *gorm.DB, stockHistories []*mode
 		WITH LastStockHistories AS (
 			SELECT 
 				*,
-				ROW_NUMBER() OVER (PARTITION BY warehouse_id, product_id, product_type, batch_number ORDER BY stock_date DESC, is_outgoing DESC, id DESC) AS rn
+				ROW_NUMBER() OVER (PARTITION BY warehouse_id, product_id, product_type ORDER BY stock_date DESC, is_outgoing DESC, id DESC) AS rn
 			FROM 
 				stock_histories
 			WHERE 
@@ -381,7 +377,7 @@ func getLastStockHistoriesForValueAdjustment(tx *gorm.DB, stockHistories []*mode
 				AND stock_date <= ? 
 				AND reference_type != 'IVAV'
 				AND is_outgoing = ?
-				AND (product_id, product_type, COALESCE(batch_number,'')) IN (`+placeholdersStr+`)
+				AND (product_id, product_type) IN (`+placeholdersStr+`)
 		)
 		SELECT 
 			*
@@ -399,79 +395,81 @@ func getLastStockHistoriesForValueAdjustment(tx *gorm.DB, stockHistories []*mode
 func GetRemainingStockHistoriesByCumulativeQty(tx *gorm.DB, warehouseId int, productId int, productType string, batchNumber string, isOutgoing *bool, qty decimal.Decimal) ([]*models.StockHistory, error) {
 	var remaininigStockHistories []*models.StockHistory
 	var err error
+	// No-batch mode: always treat inventory as fungible across batches.
+	// Ignore the provided batchNumber and do NOT filter by batch_number.
+	batchNumber = ""
 	if isOutgoing != nil && *isOutgoing {
-		// Outgoing: match strictly (you can't return unbatched stock if you asked for a batch, and vice versa)
-		// But if batchNumber is empty, standard logic matches empty batch.
-		// NOTE: Usually outgoing stock (invoices) are matched against incoming stock.
-		// This query is for finding "previous outgoing" to calculate cumulative usage.
-		// For outgoing, we usually want strict matching to the same stream.
+		// Outgoing: do NOT rely on cumulative_outgoing_qty (it may be historically per-batch).
+		// Instead, skip `qty` across all outgoing rows in chronological order.
+		var allOutgoing []*models.StockHistory
 		err = tx.Raw(`
 			SELECT * FROM stock_histories
 			WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
-				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = true AND cumulative_outgoing_qty > ?
+				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND is_outgoing = true
 				AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
 			ORDER BY stock_date, is_outgoing, id ASC;
-			`, warehouseId, warehouseId, productId, productType, batchNumber, qty).Find(&remaininigStockHistories).Error
-	} else {
-		// Incoming: if request batch is empty, allow matching ANY batch (fungible consumption).
-		// This fixes "insufficient FIFO layers" when stock has batch but invoice doesn't.
-		//
-		// IMPORTANT:
-		// We must NOT use per-batch cumulative_incoming_qty when batchNumber == "" because incoming
-		// stock may be split across multiple batches. Comparing a global consumed qty to a per-batch
-		// cumulative causes false shortages (e.g. UI shows 5 across batches, but no single batch has >4).
-		if batchNumber == "" {
-			var allIncoming []*models.StockHistory
-			err = tx.Raw(`
-				SELECT * FROM stock_histories
-				WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
-					AND warehouse_id = ? AND product_id = ? AND product_type = ? AND is_outgoing = false
-					AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
-				ORDER BY stock_date, is_outgoing, id ASC;
-				`, warehouseId, warehouseId, productId, productType).Find(&allIncoming).Error
-			if err != nil {
-				return nil, err
+			`, warehouseId, warehouseId, productId, productType).Find(&allOutgoing).Error
+		if err != nil {
+			return nil, err
+		}
+		consumed := qty
+		for _, sh := range allOutgoing {
+			if consumed.LessThanOrEqual(decimal.Zero) {
+				remaininigStockHistories = append(remaininigStockHistories, sh)
+				continue
 			}
-			// Skip already-consumed quantity across ALL batches in chronological order.
-			consumed := qty
-			for _, sh := range allIncoming {
-				if consumed.LessThanOrEqual(decimal.Zero) {
-					remaininigStockHistories = append(remaininigStockHistories, sh)
-					continue
-				}
-				if sh.Qty.LessThanOrEqual(decimal.Zero) {
-					// Defensive: ignore non-positive incoming rows.
-					continue
-				}
-				if consumed.GreaterThanOrEqual(sh.Qty) {
-					consumed = consumed.Sub(sh.Qty)
-					continue
-				}
-				// Partially consumed this layer: return the remaining quantity on it.
-				cpy := *sh
-				cpy.Qty = sh.Qty.Sub(consumed)
-				consumed = decimal.Zero
-				remaininigStockHistories = append(remaininigStockHistories, &cpy)
+			rowAbs := sh.Qty.Abs()
+			if rowAbs.LessThanOrEqual(decimal.Zero) {
+				continue
 			}
-		} else {
-			// Specific batch requested: match strictly.
-			if qty.IsZero() {
-				err = tx.Raw(`
-					SELECT * FROM stock_histories
-					WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
-						AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = false AND cumulative_incoming_qty >= ?
-						AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
-					ORDER BY stock_date, is_outgoing, id ASC;
-					`, warehouseId, warehouseId, productId, productType, batchNumber, qty).Find(&remaininigStockHistories).Error
+			if consumed.GreaterThanOrEqual(rowAbs) {
+				consumed = consumed.Sub(rowAbs)
+				continue
+			}
+			// Partial remainder on this row: keep sign.
+			cpy := *sh
+			remainAbs := rowAbs.Sub(consumed)
+			if sh.Qty.IsNegative() {
+				cpy.Qty = remainAbs.Neg()
 			} else {
-				err = tx.Raw(`
-					SELECT * FROM stock_histories
-					WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
-						AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = false AND cumulative_incoming_qty > ?
-						AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
-					ORDER BY stock_date, is_outgoing, id ASC;
-					`, warehouseId, warehouseId, productId, productType, batchNumber, qty).Find(&remaininigStockHistories).Error
+				cpy.Qty = remainAbs
 			}
+			consumed = decimal.Zero
+			remaininigStockHistories = append(remaininigStockHistories, &cpy)
+		}
+	} else {
+		// Incoming: consume across ALL batches in chronological order (no-batch mode).
+		var allIncoming []*models.StockHistory
+		err = tx.Raw(`
+			SELECT * FROM stock_histories
+			WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
+				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND is_outgoing = false
+				AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
+			ORDER BY stock_date, is_outgoing, id ASC;
+			`, warehouseId, warehouseId, productId, productType).Find(&allIncoming).Error
+		if err != nil {
+			return nil, err
+		}
+		// Skip already-consumed quantity across ALL batches in chronological order.
+		consumed := qty
+		for _, sh := range allIncoming {
+			if consumed.LessThanOrEqual(decimal.Zero) {
+				remaininigStockHistories = append(remaininigStockHistories, sh)
+				continue
+			}
+			if sh.Qty.LessThanOrEqual(decimal.Zero) {
+				// Defensive: ignore non-positive incoming rows.
+				continue
+			}
+			if consumed.GreaterThanOrEqual(sh.Qty) {
+				consumed = consumed.Sub(sh.Qty)
+				continue
+			}
+			// Partially consumed this layer: return the remaining quantity on it.
+			cpy := *sh
+			cpy.Qty = sh.Qty.Sub(consumed)
+			consumed = decimal.Zero
+			remaininigStockHistories = append(remaininigStockHistories, &cpy)
 		}
 	}
 
@@ -483,53 +481,73 @@ func GetRemainingStockHistoriesByCumulativeQtyUntilDate(tx *gorm.DB, warehouseId
 	// date := NormalizeDate(stockDate).Add(24 * time.Hour)
 	var remaininigStockHistories []*models.StockHistory
 	var err error
+	// No-batch mode: ignore the provided batchNumber and do NOT filter by batch_number.
+	batchNumber = ""
 	if isOutgoing != nil && *isOutgoing {
+		var allOutgoing []*models.StockHistory
 		err = tx.Raw(`
 			SELECT * FROM stock_histories
 			WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
-				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = true AND cumulative_outgoing_qty > ? AND stock_date <= ?
+				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND is_outgoing = true AND stock_date <= ?
 				AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
 			ORDER BY stock_date, is_outgoing, id ASC;
-			`, warehouseId, warehouseId, productId, productType, batchNumber, qty, stockDate).Find(&remaininigStockHistories).Error
+			`, warehouseId, warehouseId, productId, productType, stockDate).Find(&allOutgoing).Error
+		if err != nil {
+			return nil, err
+		}
+		consumed := qty
+		for _, sh := range allOutgoing {
+			if consumed.LessThanOrEqual(decimal.Zero) {
+				remaininigStockHistories = append(remaininigStockHistories, sh)
+				continue
+			}
+			rowAbs := sh.Qty.Abs()
+			if rowAbs.LessThanOrEqual(decimal.Zero) {
+				continue
+			}
+			if consumed.GreaterThanOrEqual(rowAbs) {
+				consumed = consumed.Sub(rowAbs)
+				continue
+			}
+			cpy := *sh
+			remainAbs := rowAbs.Sub(consumed)
+			if sh.Qty.IsNegative() {
+				cpy.Qty = remainAbs.Neg()
+			} else {
+				cpy.Qty = remainAbs
+			}
+			consumed = decimal.Zero
+			remaininigStockHistories = append(remaininigStockHistories, &cpy)
+		}
 	} else {
-		if batchNumber == "" {
-			var allIncoming []*models.StockHistory
-			err = tx.Raw(`
-				SELECT * FROM stock_histories
-				WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
-					AND warehouse_id = ? AND product_id = ? AND product_type = ? AND is_outgoing = false AND stock_date <= ?
-					AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
-				ORDER BY stock_date, is_outgoing, id ASC;
-				`, warehouseId, warehouseId, productId, productType, stockDate).Find(&allIncoming).Error
-			if err != nil {
-				return nil, err
+		var allIncoming []*models.StockHistory
+		err = tx.Raw(`
+			SELECT * FROM stock_histories
+			WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
+				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND is_outgoing = false AND stock_date <= ?
+				AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
+			ORDER BY stock_date, is_outgoing, id ASC;
+			`, warehouseId, warehouseId, productId, productType, stockDate).Find(&allIncoming).Error
+		if err != nil {
+			return nil, err
+		}
+		consumed := qty
+		for _, sh := range allIncoming {
+			if consumed.LessThanOrEqual(decimal.Zero) {
+				remaininigStockHistories = append(remaininigStockHistories, sh)
+				continue
 			}
-			consumed := qty
-			for _, sh := range allIncoming {
-				if consumed.LessThanOrEqual(decimal.Zero) {
-					remaininigStockHistories = append(remaininigStockHistories, sh)
-					continue
-				}
-				if sh.Qty.LessThanOrEqual(decimal.Zero) {
-					continue
-				}
-				if consumed.GreaterThanOrEqual(sh.Qty) {
-					consumed = consumed.Sub(sh.Qty)
-					continue
-				}
-				cpy := *sh
-				cpy.Qty = sh.Qty.Sub(consumed)
-				consumed = decimal.Zero
-				remaininigStockHistories = append(remaininigStockHistories, &cpy)
+			if sh.Qty.LessThanOrEqual(decimal.Zero) {
+				continue
 			}
-		} else {
-			err = tx.Raw(`
-				SELECT * FROM stock_histories
-				WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
-					AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = false AND cumulative_incoming_qty > ? AND stock_date <= ?
-					AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
-				ORDER BY stock_date, is_outgoing, id ASC;
-				`, warehouseId, warehouseId, productId, productType, batchNumber, qty, stockDate).Find(&remaininigStockHistories).Error
+			if consumed.GreaterThanOrEqual(sh.Qty) {
+				consumed = consumed.Sub(sh.Qty)
+				continue
+			}
+			cpy := *sh
+			cpy.Qty = sh.Qty.Sub(consumed)
+			consumed = decimal.Zero
+			remaininigStockHistories = append(remaininigStockHistories, &cpy)
 		}
 	}
 
@@ -540,45 +558,24 @@ func GetRemainingStockHistoriesByCumulativeQtyUntilDate(tx *gorm.DB, warehouseId
 func GetRemainingStockHistoriesByDate(tx *gorm.DB, warehouseId int, productId int, productType string, batchNumber string, isOutgoing *bool, stockDate time.Time) ([]*models.StockHistory, error) {
 	var remaininigStockHistories []*models.StockHistory
 	var err error
+	// No-batch mode: ignore the provided batchNumber and do NOT filter by batch_number.
+	batchNumber = ""
 	if isOutgoing != nil && *isOutgoing {
-		// Outgoing: default is strict batch matching. However, when batchNumber == "" we treat batches as fungible
-		// (unbatched sales can consume from any incoming batch). To keep FIFO consumption consistent, we must also
-		// include ALL outgoing rows (across batches) in that mode.
-		if batchNumber == "" {
-			err = tx.Raw(`
-				SELECT * FROM stock_histories
-				WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
-					AND warehouse_id = ? AND product_id = ? AND product_type = ? AND is_outgoing = true AND stock_date >= ?
-					AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
-				ORDER BY stock_date, is_outgoing, id ASC;
-				`, warehouseId, warehouseId, productId, productType, stockDate).Find(&remaininigStockHistories).Error
-		} else {
-			err = tx.Raw(`
-				SELECT * FROM stock_histories
-				WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
-					AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = true AND stock_date >= ?
-					AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
-				ORDER BY stock_date, is_outgoing, id ASC;
-				`, warehouseId, warehouseId, productId, productType, batchNumber, stockDate).Find(&remaininigStockHistories).Error
-		}
+		err = tx.Raw(`
+			SELECT * FROM stock_histories
+			WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
+				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND is_outgoing = true AND stock_date >= ?
+				AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
+			ORDER BY stock_date, is_outgoing, id ASC;
+			`, warehouseId, warehouseId, productId, productType, stockDate).Find(&remaininigStockHistories).Error
 	} else {
-		if batchNumber == "" {
-			err = tx.Raw(`
-				SELECT * FROM stock_histories
-				WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
-					AND warehouse_id = ? AND product_id = ? AND product_type = ? AND is_outgoing = false AND stock_date >= ?
-					AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
-				ORDER BY stock_date, is_outgoing, id ASC;
-				`, warehouseId, warehouseId, productId, productType, stockDate).Find(&remaininigStockHistories).Error
-		} else {
-			err = tx.Raw(`
-				SELECT * FROM stock_histories
-				WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
-					AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = false AND stock_date >= ?
-					AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
-				ORDER BY stock_date, is_outgoing, id ASC;
-				`, warehouseId, warehouseId, productId, productType, batchNumber, stockDate).Find(&remaininigStockHistories).Error
-		}
+		err = tx.Raw(`
+			SELECT * FROM stock_histories
+			WHERE business_id = (SELECT business_id FROM warehouses WHERE id = ? LIMIT 1)
+				AND warehouse_id = ? AND product_id = ? AND product_type = ? AND is_outgoing = false AND stock_date >= ?
+				AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
+			ORDER BY stock_date, is_outgoing, id ASC;
+			`, warehouseId, warehouseId, productId, productType, stockDate).Find(&remaininigStockHistories).Error
 	}
 
 	return remaininigStockHistories, err
@@ -692,8 +689,8 @@ func calculateCogs(tx *gorm.DB, logger *logrus.Logger, productDetail ProductDeta
 		if updatedReferenceId > 0 && updatedReferenceType != "" {
 			// Normal path: only scope to the updated reference.
 			err = tx.
-				Where("business_id = ? AND reference_type = ? AND reference_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = 1 AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
-					firstOutStock.BusinessId, updatedReferenceType, updatedReferenceId, firstOutStock.WarehouseId, firstOutStock.ProductId, firstOutStock.ProductType, firstOutStock.BatchNumber).
+				Where("business_id = ? AND reference_type = ? AND reference_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND is_outgoing = 1 AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
+					firstOutStock.BusinessId, updatedReferenceType, updatedReferenceId, firstOutStock.WarehouseId, firstOutStock.ProductId, firstOutStock.ProductType).
 				Find(&existingRefStockHistories).Error
 			if err != nil {
 				config.LogError(logger, "MainWorkflow.go", "CalculateCogs", "QueryExistingRefStockHistories", updatedReferenceId, err)
@@ -719,8 +716,8 @@ func calculateCogs(tx *gorm.DB, logger *logrus.Logger, productDetail ProductDeta
 			for refType, refIds := range refIdsByType {
 				var rows []*models.StockHistory
 				err = tx.
-					Where("business_id = ? AND reference_type = ? AND reference_id IN ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = 1 AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
-						firstOutStock.BusinessId, refType, refIds, firstOutStock.WarehouseId, firstOutStock.ProductId, firstOutStock.ProductType, firstOutStock.BatchNumber).
+					Where("business_id = ? AND reference_type = ? AND reference_id IN ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND is_outgoing = 1 AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
+						firstOutStock.BusinessId, refType, refIds, firstOutStock.WarehouseId, firstOutStock.ProductId, firstOutStock.ProductType).
 					Find(&rows).Error
 				if err != nil {
 					config.LogError(logger, "MainWorkflow.go", "CalculateCogs", "QueryExistingRefStockHistoriesAll", refType, err)
@@ -1236,7 +1233,7 @@ func revaluateCreditNotes(tx *gorm.DB, logger *logrus.Logger, stockHistories []*
 		WITH LastStockHistories AS (
 			SELECT 
 				*,
-				ROW_NUMBER() OVER (PARTITION BY warehouse_id, product_id, product_type, batch_number ORDER BY stock_date DESC, is_outgoing DESC, id DESC) AS rn
+				ROW_NUMBER() OVER (PARTITION BY warehouse_id, product_id, product_type ORDER BY stock_date DESC, is_outgoing DESC, id DESC) AS rn
 			FROM 
 				stock_histories
 			WHERE 
@@ -1246,7 +1243,7 @@ func revaluateCreditNotes(tx *gorm.DB, logger *logrus.Logger, stockHistories []*
 				AND is_reversal = 0
 				AND reversed_by_stock_history_id IS NULL
 				AND reference_type != 'CN'
-				AND product_id = ? AND product_type = ? AND batch_number = ?
+				AND product_id = ? AND product_type = ?
 			)
 		SELECT 
 			*
@@ -1255,7 +1252,7 @@ func revaluateCreditNotes(tx *gorm.DB, logger *logrus.Logger, stockHistories []*
 		WHERE 
 			rn = 1;
 		`, stockHistory.WarehouseId, stockHistory.StockDate, stockHistory.ProductId,
-			stockHistory.ProductType, stockHistory.BatchNumber).
+			stockHistory.ProductType).
 			Find(&lastIncomingStockHistories).Error
 		if err != nil {
 			config.LogError(logger, "MainWorkflow.go", "RevaluateCreditNotes", "GetLastIncomingStockHistory", stockHistory, err)
@@ -1632,7 +1629,6 @@ func ensureNonNegativeForKeys(tx *gorm.DB, logger *logrus.Logger, stockHistories
 		WarehouseId int
 		ProductId   int
 		ProductType models.ProductType
-		Batch       string
 	}
 	seen := make(map[key]struct{})
 	for _, sh := range stockHistories {
@@ -1644,7 +1640,6 @@ func ensureNonNegativeForKeys(tx *gorm.DB, logger *logrus.Logger, stockHistories
 			WarehouseId: sh.WarehouseId,
 			ProductId:   sh.ProductId,
 			ProductType: sh.ProductType,
-			Batch:       sh.BatchNumber,
 		}
 		if _, ok := seen[k]; ok {
 			continue
@@ -1657,7 +1652,7 @@ func ensureNonNegativeForKeys(tx *gorm.DB, logger *logrus.Logger, stockHistories
 			FROM (
 				SELECT
 					SUM(qty) OVER (
-						PARTITION BY warehouse_id, product_id, product_type, COALESCE(batch_number,'')
+						PARTITION BY warehouse_id, product_id, product_type
 						ORDER BY stock_date, cumulative_sequence, id
 						ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
 					) AS running_qty
@@ -1666,17 +1661,16 @@ func ensureNonNegativeForKeys(tx *gorm.DB, logger *logrus.Logger, stockHistories
 				  AND warehouse_id = ?
 				  AND product_id = ?
 				  AND product_type = ?
-				  AND COALESCE(batch_number,'') = ?
 				  AND is_reversal = 0
 				  AND reversed_by_stock_history_id IS NULL
 			) t
-		`, k.BusinessId, k.WarehouseId, k.ProductId, k.ProductType, k.Batch).Scan(&minQty).Error
+		`, k.BusinessId, k.WarehouseId, k.ProductId, k.ProductType).Scan(&minQty).Error
 		if err != nil {
 			config.LogError(logger, "MainWorkflow.go", "ensureNonNegativeForKeys", "min_running_qty", k, err)
 			return err
 		}
 		if minQty.LessThan(decimal.Zero) {
-			return fmt.Errorf("inventory would become negative for product_id=%d product_type=%s warehouse_id=%d batch=%s", k.ProductId, string(k.ProductType), k.WarehouseId, k.Batch)
+			return fmt.Errorf("inventory would become negative for product_id=%d product_type=%s warehouse_id=%d", k.ProductId, string(k.ProductType), k.WarehouseId)
 		}
 	}
 	return nil
@@ -1713,7 +1707,6 @@ func ProcessIncomingStocks(tx *gorm.DB, logger *logrus.Logger, stockHistories []
 		WarehouseId int
 		ProductId   int
 		ProductType models.ProductType
-		BatchNumber string
 	}
 	rebuildStarts := make(map[rebuildKey]time.Time)
 	for _, sh := range stockHistories {
@@ -1724,7 +1717,6 @@ func ProcessIncomingStocks(tx *gorm.DB, logger *logrus.Logger, stockHistories []
 			WarehouseId: sh.WarehouseId,
 			ProductId:   sh.ProductId,
 			ProductType: sh.ProductType,
-			BatchNumber: sh.BatchNumber,
 		}
 		if existing, ok := rebuildStarts[key]; !ok || sh.StockDate.Before(existing) {
 			rebuildStarts[key] = sh.StockDate
@@ -1734,8 +1726,8 @@ func ProcessIncomingStocks(tx *gorm.DB, logger *logrus.Logger, stockHistories []
 	for key, startDate := range rebuildStarts {
 		var outgoingCount int64
 		err = tx.Model(&models.StockHistory{}).
-			Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ?",
-				stockHistories[0].BusinessId, key.WarehouseId, key.ProductId, key.ProductType, key.BatchNumber).
+			Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ?",
+				stockHistories[0].BusinessId, key.WarehouseId, key.ProductId, key.ProductType).
 			Where("is_outgoing = 1 AND stock_date >= ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL", startDate).
 			Count(&outgoingCount).Error
 		if err != nil {
@@ -1748,7 +1740,7 @@ func ProcessIncomingStocks(tx *gorm.DB, logger *logrus.Logger, stockHistories []
 	}
 	for key, startDate := range rebuildKeys {
 		ids, err := RebuildInventoryForItemWarehouseFromDate(
-			tx, logger, stockHistories[0].BusinessId, key.WarehouseId, key.ProductId, key.ProductType, key.BatchNumber, startDate,
+			tx, logger, stockHistories[0].BusinessId, key.WarehouseId, key.ProductId, key.ProductType, "", startDate,
 		)
 		if err != nil {
 			return accountIds, err
@@ -1766,7 +1758,6 @@ func ProcessIncomingStocks(tx *gorm.DB, logger *logrus.Logger, stockHistories []
 			WarehouseId: stockHistory.WarehouseId,
 			ProductId:   stockHistory.ProductId,
 			ProductType: stockHistory.ProductType,
-			BatchNumber: stockHistory.BatchNumber,
 		}
 		if _, shouldSkip := rebuildKeys[key]; shouldSkip {
 			// Already rebuilt deterministically for this key.
@@ -1784,8 +1775,7 @@ func ProcessIncomingStocks(tx *gorm.DB, logger *logrus.Logger, stockHistories []
 		for _, lastStockHistory := range lastIncomingStockHistories {
 			if lastStockHistory.WarehouseId == stockHistory.WarehouseId &&
 				lastStockHistory.ProductId == stockHistory.ProductId &&
-				lastStockHistory.ProductType == stockHistory.ProductType &&
-				lastStockHistory.BatchNumber == stockHistory.BatchNumber {
+				lastStockHistory.ProductType == stockHistory.ProductType {
 
 				lastCumulativeIncomingQty = lastStockHistory.CumulativeIncomingQty
 				break
@@ -1793,8 +1783,8 @@ func ProcessIncomingStocks(tx *gorm.DB, logger *logrus.Logger, stockHistories []
 		}
 
 		var maxCumulativeOutgoingQty decimal.Decimal
-		err = tx.Model(&models.StockHistory{}).Where("warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ?",
-			stockHistory.WarehouseId, stockHistory.ProductId, stockHistory.ProductType, stockHistory.BatchNumber).
+		err = tx.Model(&models.StockHistory{}).Where("warehouse_id = ? AND product_id = ? AND product_type = ?",
+			stockHistory.WarehouseId, stockHistory.ProductId, stockHistory.ProductType).
 			Select("COALESCE(MAX(cumulative_outgoing_qty), 0)").Scan(&maxCumulativeOutgoingQty).Error
 		if err != nil {
 			config.LogError(logger, "MainWorkflow.go", "ProcessIncomingStocks", "GetMaxCumulativeOutgoingQty", nil, err)
@@ -1807,8 +1797,8 @@ func ProcessIncomingStocks(tx *gorm.DB, logger *logrus.Logger, stockHistories []
 			// on or after this stock_date. Recalculate whenever such outgoing rows exist.
 			var outgoingCount int64
 			err = tx.Model(&models.StockHistory{}).
-				Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND batch_number = ?",
-					stockHistory.BusinessId, stockHistory.WarehouseId, stockHistory.ProductId, stockHistory.ProductType, stockHistory.BatchNumber).
+				Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ?",
+					stockHistory.BusinessId, stockHistory.WarehouseId, stockHistory.ProductId, stockHistory.ProductType).
 				Where("is_outgoing = 1").
 				Where("stock_date >= ?", stockHistory.StockDate).
 				Where("is_reversal = 0 AND reversed_by_stock_history_id IS NULL").

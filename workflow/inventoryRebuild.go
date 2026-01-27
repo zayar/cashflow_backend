@@ -13,7 +13,8 @@ import (
 )
 
 func acquireInventoryRebuildLock(tx *gorm.DB, businessId string, warehouseId int, productId int, productType models.ProductType, batchNumber string) error {
-	lockName := fmt.Sprintf("inv_rebuild:%s:%d:%d:%s:%s", businessId, warehouseId, productId, productType, batchNumber)
+	// No-batch mode: locks must not be per-batch.
+	lockName := fmt.Sprintf("inv_rebuild:%s:%d:%d:%s", businessId, warehouseId, productId, productType)
 	var ok int
 	if err := tx.Raw("SELECT GET_LOCK(?, 30)", lockName).Scan(&ok).Error; err != nil {
 		return err
@@ -26,7 +27,8 @@ func acquireInventoryRebuildLock(tx *gorm.DB, businessId string, warehouseId int
 }
 
 func releaseInventoryRebuildLock(tx *gorm.DB, businessId string, warehouseId int, productId int, productType models.ProductType, batchNumber string) {
-	lockName := fmt.Sprintf("inv_rebuild:%s:%d:%d:%s:%s", businessId, warehouseId, productId, productType, batchNumber)
+	// No-batch mode: locks must not be per-batch.
+	lockName := fmt.Sprintf("inv_rebuild:%s:%d:%d:%s", businessId, warehouseId, productId, productType)
 	var _ok int
 	_ = tx.Raw("SELECT RELEASE_LOCK(?)", lockName).Scan(&_ok).Error
 }
@@ -43,6 +45,8 @@ func RebuildInventoryForItemWarehouseFromDate(
 	batchNumber string,
 	startDate time.Time,
 ) ([]int, error) {
+	// No-batch mode: ignore any provided batch number.
+	batchNumber = ""
 	if tx == nil {
 		return nil, fmt.Errorf("rebuild inventory: tx is nil")
 	}
@@ -79,41 +83,15 @@ func RebuildInventoryForItemWarehouseFromDate(
 	}
 
 	var beforeOutgoingCount int64
-	if batchNumber == "" {
-		_ = tx.Model(&models.StockHistory{}).
-			Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND is_outgoing = 1 AND stock_date >= ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
-				businessId, warehouseId, productId, productType, normalizedStart).
-			Count(&beforeOutgoingCount).Error
-	} else {
-		_ = tx.Model(&models.StockHistory{}).
-			Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = 1 AND stock_date >= ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
-				businessId, warehouseId, productId, productType, batchNumber, normalizedStart).
-			Count(&beforeOutgoingCount).Error
-	}
+	_ = tx.Model(&models.StockHistory{}).
+		Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND is_outgoing = 1 AND stock_date >= ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
+			businessId, warehouseId, productId, productType, normalizedStart).
+		Count(&beforeOutgoingCount).Error
 
 	// Find last outgoing cumulative qty before startDate to seed FIFO.
-	lastCumulativeOutgoingQty := decimal.Zero
-	var lastOut models.StockHistory
-	if batchNumber == "" {
-		err = tx.
-			Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND is_outgoing = 1 AND stock_date < ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
-				businessId, warehouseId, productId, productType, normalizedStart).
-			Order("stock_date DESC, is_outgoing DESC, id DESC").
-			Limit(1).
-			Find(&lastOut).Error
-	} else {
-		err = tx.
-			Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = 1 AND stock_date < ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
-				businessId, warehouseId, productId, productType, batchNumber, normalizedStart).
-			Order("stock_date DESC, is_outgoing DESC, id DESC").
-			Limit(1).
-			Find(&lastOut).Error
-	}
-	if err != nil && err != gorm.ErrRecordNotFound {
+	lastCumulativeOutgoingQty, err := getGlobalOutgoingQtyBeforeDate(tx, businessId, warehouseId, productId, productType, normalizedStart)
+	if err != nil {
 		return nil, err
-	}
-	if lastOut.ID > 0 {
-		lastCumulativeOutgoingQty = lastOut.CumulativeOutgoingQty
 	}
 
 	incoming, err := GetRemainingStockHistoriesByCumulativeQty(
@@ -132,16 +110,16 @@ func RebuildInventoryForItemWarehouseFromDate(
 
 	if logger != nil {
 		logger.WithFields(logrus.Fields{
-			"business_id":               businessId,
-			"warehouse_id":              warehouseId,
-			"product_id":                productId,
-			"product_type":              productType,
-			"batch_number":              batchNumber,
-			"start_date":                normalizedStart.Format(time.RFC3339),
-			"incoming_count":            len(incoming),
-			"outgoing_count":            len(outgoing),
-			"prior_cum_outgoing_qty":    lastCumulativeOutgoingQty.String(),
-			"outgoing_active_before":    beforeOutgoingCount,
+			"business_id":            businessId,
+			"warehouse_id":           warehouseId,
+			"product_id":             productId,
+			"product_type":           productType,
+			"batch_number":           batchNumber,
+			"start_date":             normalizedStart.Format(time.RFC3339),
+			"incoming_count":         len(incoming),
+			"outgoing_count":         len(outgoing),
+			"prior_cum_outgoing_qty": lastCumulativeOutgoingQty.String(),
+			"outgoing_active_before": beforeOutgoingCount,
 		}).Info("inv.rebuild.source_count")
 	}
 
@@ -151,12 +129,17 @@ func RebuildInventoryForItemWarehouseFromDate(
 		if err != nil {
 			return nil, err
 		}
+		// Seed current qty from the ledger-of-record (no batch partitions).
 		startCurrentQty := decimal.Zero
-		if len(incoming) > 0 {
-			startCurrentQty = incoming[0].CumulativeIncomingQty.Sub(lastCumulativeOutgoingQty)
-			if startCurrentQty.IsNegative() {
-				startCurrentQty = decimal.Zero
-			}
+		_ = tx.Raw(`
+			SELECT COALESCE(SUM(qty), 0) AS qty
+			FROM stock_histories
+			WHERE business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ?
+			  AND stock_date < ?
+			  AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
+		`, businessId, warehouseId, productId, productType, normalizedStart).Scan(&startCurrentQty).Error
+		if startCurrentQty.IsNegative() {
+			startCurrentQty = decimal.Zero
 		}
 		accountIds, err = calculateCogs(tx, logger, productDetail, decimal.Zero, startCurrentQty, incoming, outgoing, 0, "")
 		if err != nil {
@@ -178,42 +161,24 @@ func RebuildInventoryForItemWarehouseFromDate(
 	}
 
 	var afterOutgoingCount int64
-	if batchNumber == "" {
-		_ = tx.Model(&models.StockHistory{}).
-			Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND is_outgoing = 1 AND stock_date >= ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
-				businessId, warehouseId, productId, productType, normalizedStart).
-			Count(&afterOutgoingCount).Error
-	} else {
-		_ = tx.Model(&models.StockHistory{}).
-			Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ? AND is_outgoing = 1 AND stock_date >= ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
-				businessId, warehouseId, productId, productType, batchNumber, normalizedStart).
-			Count(&afterOutgoingCount).Error
-	}
+	_ = tx.Model(&models.StockHistory{}).
+		Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND is_outgoing = 1 AND stock_date >= ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
+			businessId, warehouseId, productId, productType, normalizedStart).
+		Count(&afterOutgoingCount).Error
 
 	type totals struct {
 		Qty        decimal.Decimal
 		AssetValue decimal.Decimal
 	}
 	var t totals
-	if batchNumber == "" {
-		_ = tx.Raw(`
-		SELECT
-			COALESCE(SUM(qty), 0) AS qty,
-			COALESCE(SUM(qty * base_unit_value), 0) AS asset_value
-		FROM stock_histories
-		WHERE business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ?
-			AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
-	`, businessId, warehouseId, productId, productType).Scan(&t).Error
-	} else {
-		_ = tx.Raw(`
-		SELECT
-			COALESCE(SUM(qty), 0) AS qty,
-			COALESCE(SUM(qty * base_unit_value), 0) AS asset_value
-		FROM stock_histories
-		WHERE business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ?
-			AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
-	`, businessId, warehouseId, productId, productType, batchNumber).Scan(&t).Error
-	}
+	_ = tx.Raw(`
+	SELECT
+		COALESCE(SUM(qty), 0) AS qty,
+		COALESCE(SUM(qty * base_unit_value), 0) AS asset_value
+	FROM stock_histories
+	WHERE business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ?
+		AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
+`, businessId, warehouseId, productId, productType).Scan(&t).Error
 
 	if logger != nil {
 		logger.WithFields(logrus.Fields{
