@@ -1631,6 +1631,9 @@ func ensureNonNegativeForKeys(tx *gorm.DB, logger *logrus.Logger, stockHistories
 		ProductType models.ProductType
 	}
 	seen := make(map[key]struct{})
+	// Guardrail: only enforce non-negative up to the max stock_date we are processing.
+	// This prevents backdated postings from being blocked by future transactions.
+	maxDateByKey := make(map[key]time.Time)
 	for _, sh := range stockHistories {
 		if sh == nil {
 			continue
@@ -1642,9 +1645,13 @@ func ensureNonNegativeForKeys(tx *gorm.DB, logger *logrus.Logger, stockHistories
 			ProductType: sh.ProductType,
 		}
 		if _, ok := seen[k]; ok {
+			if currentMax, ok := maxDateByKey[k]; !ok || sh.StockDate.After(currentMax) {
+				maxDateByKey[k] = sh.StockDate
+			}
 			continue
 		}
 		seen[k] = struct{}{}
+		maxDateByKey[k] = sh.StockDate
 
 		var minQty decimal.Decimal
 		err := tx.Raw(`
@@ -1670,10 +1677,11 @@ func ensureNonNegativeForKeys(tx *gorm.DB, logger *logrus.Logger, stockHistories
 				  AND warehouse_id = ?
 				  AND product_id = ?
 				  AND product_type = ?
+				  AND stock_date <= ?
 				  AND is_reversal = 0
 				  AND reversed_by_stock_history_id IS NULL
 			) t
-		`, k.BusinessId, k.WarehouseId, k.ProductId, k.ProductType).Scan(&minQty).Error
+		`, k.BusinessId, k.WarehouseId, k.ProductId, k.ProductType, maxDateByKey[k]).Scan(&minQty).Error
 		if err != nil {
 			config.LogError(logger, "MainWorkflow.go", "ensureNonNegativeForKeys", "min_running_qty", k, err)
 			return err
