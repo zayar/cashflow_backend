@@ -1656,9 +1656,13 @@ func ensureNonNegativeForKeys(tx *gorm.DB, logger *logrus.Logger, stockHistories
 						-- IMPORTANT: do not rely on cumulative_sequence for ordering.
 						-- After migrations (e.g. no-batch flattening), legacy rows may have per-batch cumulative_sequence
 						-- which can create a false negative running balance and block posting.
-						-- Use the same canonical order as closing-balance recompute:
-						-- incoming first (is_outgoing=0), then outgoing (is_outgoing=1), then id.
-						ORDER BY stock_date, COALESCE(is_outgoing, 0), id
+					-- Use the same canonical order as closing-balance recompute:
+					-- incoming first, then outgoing, then id.
+					--
+					-- IMPORTANT: derive direction from qty sign, not is_outgoing.
+					-- Some legacy rows can have is_outgoing NULL/false even when qty<0,
+					-- which would misorder the running balance and cause false negatives.
+					ORDER BY stock_date, CASE WHEN qty < 0 THEN 1 ELSE 0 END, id
 						ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
 					) AS running_qty
 				FROM stock_histories
