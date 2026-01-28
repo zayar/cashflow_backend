@@ -94,8 +94,8 @@ func RebuildInventoryForItemWarehouseFromDate(
 		return nil, err
 	}
 
-	incoming, err := GetRemainingStockHistoriesByCumulativeQty(
-		tx, warehouseId, productId, string(productType), batchNumber, utils.NewFalse(), lastCumulativeOutgoingQty,
+	incoming, startCurrentQty, err := getRemainingIncomingStockHistoriesFungible(
+		tx, businessId, warehouseId, productId, productType, lastCumulativeOutgoingQty,
 	)
 	if err != nil {
 		return nil, err
@@ -128,18 +128,6 @@ func RebuildInventoryForItemWarehouseFromDate(
 		productDetail, err := GetProductDetail(tx, productId, productType)
 		if err != nil {
 			return nil, err
-		}
-		// Seed current qty from the ledger-of-record (no batch partitions).
-		startCurrentQty := decimal.Zero
-		_ = tx.Raw(`
-			SELECT COALESCE(SUM(qty), 0) AS qty
-			FROM stock_histories
-			WHERE business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ?
-			  AND stock_date < ?
-			  AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL
-		`, businessId, warehouseId, productId, productType, normalizedStart).Scan(&startCurrentQty).Error
-		if startCurrentQty.IsNegative() {
-			startCurrentQty = decimal.Zero
 		}
 		accountIds, err = calculateCogs(tx, logger, productDetail, decimal.Zero, startCurrentQty, incoming, outgoing, 0, "")
 		if err != nil {
