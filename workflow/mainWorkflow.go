@@ -1209,6 +1209,28 @@ func calculateCogs(tx *gorm.DB, logger *logrus.Logger, productDetail ProductDeta
 		}
 	}
 
+	// Keep transfer-in valuation layers in sync with transfer-out repricing.
+	if len(outgoingStockHistories) > 0 {
+		transferOrderIDs := make(map[int]struct{})
+		for _, out := range outgoingStockHistories {
+			if out == nil {
+				continue
+			}
+			if out.ReferenceType == models.StockReferenceTypeTransferOrder && out.ReferenceID > 0 {
+				transferOrderIDs[out.ReferenceID] = struct{}{}
+			}
+		}
+		if len(transferOrderIDs) > 0 {
+			allowCreate := updatedReferenceId == 0 && updatedReferenceType == ""
+			for transferOrderId := range transferOrderIDs {
+				if _, err := SyncTransferOrderTransferInFromOutgoing(tx, logger, outgoingStockHistories[0].BusinessId, transferOrderId, allowCreate); err != nil {
+					config.LogError(logger, "MainWorkflow.go", "CalculateCogs", "SyncTransferOrderTransferInFromOutgoing", transferOrderId, err)
+					return accountIds, err
+				}
+			}
+		}
+	}
+
 	return accountIds, err
 }
 

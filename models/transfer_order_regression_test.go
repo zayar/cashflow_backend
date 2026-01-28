@@ -482,6 +482,274 @@ func TestTransferOrderInventoryValuationByItemIncludesAllFIFOLayersOnDestination
 	}
 }
 
+func TestTransferOrderBackdatedBillRepricesTransferIn(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("INTEGRATION_TESTS")) == "" {
+		t.Skip("set INTEGRATION_TESTS=1 to run integration tests (requires docker)")
+	}
+
+	ctx := context.Background()
+
+	redisName, redisPort := startRedisContainer(t)
+	t.Cleanup(func() { _ = dockerRmForce(redisName) })
+
+	mysqlName, mysqlPort := startMySQLContainer(t)
+	t.Cleanup(func() { _ = dockerRmForce(mysqlName) })
+
+	// Wire env for config.Connect* helpers.
+	t.Setenv("REDIS_ADDRESS", fmt.Sprintf("127.0.0.1:%s", redisPort))
+	t.Setenv("DB_USER", "root")
+	t.Setenv("DB_PASSWORD", "testpw")
+	t.Setenv("DB_HOST", "127.0.0.1")
+	t.Setenv("DB_PORT", mysqlPort)
+	t.Setenv("DB_NAME_2", "pitibooks_test")
+	t.Setenv("STOCK_COMMANDS_DOCS", "")
+
+	config.ConnectDatabaseWithRetry()
+	config.ConnectRedisWithRetry()
+	models.MigrateTable()
+
+	ctx = utils.SetUserIdInContext(ctx, 1)
+	ctx = utils.SetUserNameInContext(ctx, "Test")
+	ctx = utils.SetUsernameInContext(ctx, "test@local")
+
+	// Business + warehouses.
+	biz, err := models.CreateBusiness(ctx, &models.NewBusiness{
+		Name:  "Test Biz",
+		Email: "owner@test.local",
+	})
+	if err != nil {
+		t.Fatalf("CreateBusiness: %v", err)
+	}
+	businessID := biz.ID.String()
+	ctx = utils.SetBusinessIdInContext(ctx, businessID)
+
+	db := config.GetDB()
+	var source models.Warehouse
+	if err := db.WithContext(ctx).Where("business_id = ? AND name = ?", businessID, "Primary Warehouse").First(&source).Error; err != nil {
+		t.Fatalf("fetch source warehouse: %v", err)
+	}
+	dest, err := models.CreateWarehouse(ctx, &models.NewWarehouse{
+		BranchId: biz.PrimaryBranchId,
+		Name:     "Wooo Warehouse",
+	})
+	if err != nil {
+		t.Fatalf("CreateWarehouse: %v", err)
+	}
+
+	reason, err := models.CreateReason(ctx, &models.NewReason{Name: "Transfer"})
+	if err != nil {
+		t.Fatalf("CreateReason: %v", err)
+	}
+	unit, err := models.CreateProductUnit(ctx, &models.NewProductUnit{Name: "Pcs", Abbreviation: "pc", Precision: models.PrecisionZero})
+	if err != nil {
+		t.Fatalf("CreateProductUnit: %v", err)
+	}
+	sysAccounts, err := models.GetSystemAccounts(businessID)
+	if err != nil {
+		t.Fatalf("GetSystemAccounts: %v", err)
+	}
+	invAcc := sysAccounts[models.AccountCodeInventoryAsset]
+	purchaseAcc := sysAccounts[models.AccountCodeCostOfGoodsSold]
+	if invAcc == 0 || purchaseAcc == 0 {
+		t.Fatalf("missing required system accounts (inv=%d purchase=%d)", invAcc, purchaseAcc)
+	}
+
+	orange, err := models.CreateProduct(ctx, &models.NewProduct{
+		Name:               "Orange",
+		Sku:                "ORG-001",
+		Barcode:            "ORG-001",
+		UnitId:             unit.ID,
+		SalesAccountId:     sysAccounts[models.AccountCodeSales],
+		PurchaseAccountId:  purchaseAcc,
+		InventoryAccountId: invAcc,
+		IsBatchTracking:    utils.NewFalse(),
+	})
+	if err != nil {
+		t.Fatalf("CreateProduct: %v", err)
+	}
+
+	supplier, err := models.CreateSupplier(ctx, &models.NewSupplier{
+		Name:                 "Supplier A",
+		Email:                "supplier@test.local",
+		CurrencyId:           biz.BaseCurrencyId,
+		ExchangeRate:         decimal.NewFromInt(1),
+		SupplierPaymentTerms: models.PaymentTermsDueOnReceipt,
+	})
+	if err != nil {
+		t.Fatalf("CreateSupplier: %v", err)
+	}
+
+	isTaxInclusive := false
+	billDate := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+	bill, err := models.CreateBill(ctx, &models.NewBill{
+		SupplierId:       supplier.ID,
+		BranchId:         biz.PrimaryBranchId,
+		BillDate:         billDate,
+		BillPaymentTerms: models.PaymentTermsDueOnReceipt,
+		CurrencyId:       biz.BaseCurrencyId,
+		ExchangeRate:     decimal.NewFromInt(1),
+		WarehouseId:      source.ID,
+		IsTaxInclusive:   &isTaxInclusive,
+		CurrentStatus:    models.BillStatusConfirmed,
+		ReferenceNumber:  "BL-7",
+		Details: []models.NewBillDetail{{
+			ProductId:      orange.ID,
+			ProductType:    models.ProductTypeSingle,
+			BatchNumber:    "",
+			Name:           "Orange",
+			Description:    "",
+			DetailAccountId: purchaseAcc,
+			DetailQty:      decimal.NewFromInt(2),
+			DetailUnitRate: decimal.NewFromInt(2700),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CreateBill: %v", err)
+	}
+
+	var billOutbox models.PubSubMessageRecord
+	if err := db.WithContext(ctx).
+		Where("business_id = ? AND reference_type = ? AND reference_id = ? AND action = ?",
+			businessID, models.AccountReferenceTypeBill, bill.ID, models.PubSubMessageActionCreate).
+		Order("id DESC").
+		First(&billOutbox).Error; err != nil {
+		t.Fatalf("expected outbox record for bill: %v", err)
+	}
+	logger := logrus.New()
+	wtxBL := db.Begin()
+	if err := workflow.ProcessBillWorkflow(wtxBL, logger, models.ConvertToPubSubMessage(billOutbox)); err != nil {
+		t.Fatalf("ProcessBillWorkflow(create): %v", err)
+	}
+	if err := wtxBL.Commit().Error; err != nil {
+		t.Fatalf("bill workflow commit: %v", err)
+	}
+
+	transferDate := time.Date(2026, 1, 13, 12, 0, 0, 0, time.UTC)
+	to, err := models.CreateTransferOrder(ctx, &models.NewTransferOrder{
+		OrderNumber:            "TO-0001",
+		TransferDate:           transferDate,
+		ReasonId:               reason.ID,
+		SourceWarehouseId:      source.ID,
+		DestinationWarehouseId: dest.ID,
+		CurrentStatus:          models.TransferOrderStatusConfirmed,
+		Details: []models.NewTransferOrderDetail{{
+			ProductId:   orange.ID,
+			ProductType: models.ProductTypeSingle,
+			Name:        "Orange",
+			TransferQty: decimal.NewFromInt(2),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CreateTransferOrder: %v", err)
+	}
+	var toOutbox models.PubSubMessageRecord
+	if err := db.WithContext(ctx).
+		Where("business_id = ? AND reference_type = ? AND reference_id = ?",
+			businessID, models.AccountReferenceTypeTransferOrder, to.ID).
+		Order("id DESC").
+		First(&toOutbox).Error; err != nil {
+		t.Fatalf("expected outbox record for transfer order: %v", err)
+	}
+	wtxTO := db.Begin()
+	if err := workflow.ProcessTransferOrderWorkflow(wtxTO, logger, models.ConvertToPubSubMessage(toOutbox)); err != nil {
+		t.Fatalf("ProcessTransferOrderWorkflow: %v", err)
+	}
+	if err := wtxTO.Commit().Error; err != nil {
+		t.Fatalf("transfer order workflow commit: %v", err)
+	}
+
+	// Update bill cost: 2700 -> 2800 (backdated).
+	_, err = models.UpdateBill(ctx, bill.ID, &models.NewBill{
+		SupplierId:       supplier.ID,
+		BranchId:         biz.PrimaryBranchId,
+		BillDate:         billDate,
+		BillPaymentTerms: models.PaymentTermsDueOnReceipt,
+		CurrencyId:       biz.BaseCurrencyId,
+		ExchangeRate:     decimal.NewFromInt(1),
+		WarehouseId:      source.ID,
+		IsTaxInclusive:   &isTaxInclusive,
+		CurrentStatus:    models.BillStatusConfirmed,
+		ReferenceNumber:  "BL-7",
+		Details: []models.NewBillDetail{{
+			ProductId:      orange.ID,
+			ProductType:    models.ProductTypeSingle,
+			BatchNumber:    "",
+			Name:           "Orange",
+			Description:    "",
+			DetailAccountId: purchaseAcc,
+			DetailQty:      decimal.NewFromInt(2),
+			DetailUnitRate: decimal.NewFromInt(2800),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBill: %v", err)
+	}
+
+	var billUpdateOutbox models.PubSubMessageRecord
+	if err := db.WithContext(ctx).
+		Where("business_id = ? AND reference_type = ? AND reference_id = ? AND action = ?",
+			businessID, models.AccountReferenceTypeBill, bill.ID, models.PubSubMessageActionUpdate).
+		Order("id DESC").
+		First(&billUpdateOutbox).Error; err != nil {
+		t.Fatalf("expected outbox record for bill update: %v", err)
+	}
+	wtxBLU := db.Begin()
+	if err := workflow.ProcessBillWorkflow(wtxBLU, logger, models.ConvertToPubSubMessage(billUpdateOutbox)); err != nil {
+		t.Fatalf("ProcessBillWorkflow(update): %v", err)
+	}
+	if err := wtxBLU.Commit().Error; err != nil {
+		t.Fatalf("bill update workflow commit: %v", err)
+	}
+
+	// Validate transfer-out and transfer-in unit costs are aligned at 2,800.
+	var outRows []models.StockHistory
+	if err := db.WithContext(ctx).
+		Where("business_id = ? AND reference_type = ? AND reference_id = ? AND is_outgoing = 1 AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
+			businessID, models.StockReferenceTypeTransferOrder, to.ID).
+		Find(&outRows).Error; err != nil {
+		t.Fatalf("load transfer-out rows: %v", err)
+	}
+	if len(outRows) == 0 {
+		t.Fatalf("expected transfer-out rows to exist")
+	}
+	var inRows []models.StockHistory
+	if err := db.WithContext(ctx).
+		Where("business_id = ? AND reference_type = ? AND reference_id = ? AND is_transfer_in = 1 AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL",
+			businessID, models.StockReferenceTypeTransferOrder, to.ID).
+		Find(&inRows).Error; err != nil {
+		t.Fatalf("load transfer-in rows: %v", err)
+	}
+	if len(inRows) == 0 {
+		t.Fatalf("expected transfer-in rows to exist")
+	}
+
+	outQty := decimal.Zero
+	outUnitCosts := make(map[string]struct{})
+	for _, r := range outRows {
+		outQty = outQty.Add(r.Qty)
+		outUnitCosts[r.BaseUnitValue.String()] = struct{}{}
+	}
+	inQty := decimal.Zero
+	inUnitCosts := make(map[string]struct{})
+	for _, r := range inRows {
+		inQty = inQty.Add(r.Qty)
+		inUnitCosts[r.BaseUnitValue.String()] = struct{}{}
+	}
+
+	if outQty.Cmp(decimal.NewFromInt(-2)) != 0 {
+		t.Fatalf("expected transfer-out qty=-2; got %s", outQty.String())
+	}
+	if inQty.Cmp(decimal.NewFromInt(2)) != 0 {
+		t.Fatalf("expected transfer-in qty=2; got %s", inQty.String())
+	}
+	if len(outUnitCosts) != 1 || outRows[0].BaseUnitValue.Cmp(decimal.NewFromInt(2800)) != 0 {
+		t.Fatalf("expected transfer-out unit cost=2800; got %v", outUnitCosts)
+	}
+	if len(inUnitCosts) != 1 || inRows[0].BaseUnitValue.Cmp(decimal.NewFromInt(2800)) != 0 {
+		t.Fatalf("expected transfer-in unit cost=2800; got %v", inUnitCosts)
+	}
+}
+
 func TestInventoryValuationByItem_DoesNotDoubleCountTransferReversals(t *testing.T) {
 	if strings.TrimSpace(os.Getenv("INTEGRATION_TESTS")) == "" {
 		t.Skip("set INTEGRATION_TESTS=1 to run integration tests (requires docker)")
