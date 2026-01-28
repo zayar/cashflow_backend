@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/mmdatafocus/books_backend/config"
 	"github.com/mmdatafocus/books_backend/utils"
 	"github.com/shopspring/decimal"
+	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 )
 
@@ -310,6 +312,162 @@ func stockSummaryOnHand(tx *gorm.DB, businessId string, warehouseId int, product
 		WHERE business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND COALESCE(batch_number,'') = ?
 	`, businessId, warehouseId, productId, productType, batchTrim).Scan(&onHand).Error
 	return onHand, err
+}
+
+func invoiceStockDebugEnabled() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("DEBUG_INVOICE_STOCK")), "true")
+}
+
+func logInvoiceStockDecision(fields logrus.Fields, msg string) {
+	if !invoiceStockDebugEnabled() {
+		return
+	}
+	logger := config.GetLogger()
+	if logger == nil {
+		return
+	}
+	logger.WithFields(fields).Info(msg)
+}
+
+func invoiceStockKey(productId int, productType ProductType, batchTrim string) string {
+	return fmt.Sprintf("%d-%s-%s", productId, string(productType), strings.TrimSpace(batchTrim))
+}
+
+// validateInvoiceEditStock ensures edit-time stock validation uses ledger as-of invoice date
+// and accounts for the invoice's own prior confirmed quantities (so we don't double-count).
+func validateInvoiceEditStock(
+	tx *gorm.DB,
+	ctx context.Context,
+	businessId string,
+	invoiceId int,
+	lineId int,
+	invoiceDate time.Time,
+	warehouseId int,
+	productId int,
+	productType ProductType,
+	batchNumber string,
+	itemName string,
+	newQty decimal.Decimal,
+	oldLineQty decimal.Decimal,
+	oldTotalsByKey map[string]decimal.Decimal,
+	reservedGlobal map[string]decimal.Decimal,
+	reservedByBatch map[string]decimal.Decimal,
+) error {
+	if tx == nil {
+		return errors.New("tx is nil")
+	}
+	batchTrim := strings.TrimSpace(batchNumber)
+	key := invoiceStockKey(productId, productType, batchTrim)
+	globalKey := invoiceStockKey(productId, productType, "")
+
+	asOf := MyDateString(invoiceDate)
+	pid := productId
+	pt := productType
+	var batchPtr *string
+	if batchTrim != "" {
+		batchPtr = &batchTrim
+	}
+	rows, err := InventorySnapshotByProductWarehouse(ctx, asOf, &warehouseId, &pid, &pt, batchPtr)
+	if err != nil {
+		return err
+	}
+	onHand := decimal.Zero
+	for _, r := range rows {
+		onHand = onHand.Add(r.StockOnHand)
+	}
+
+	oldTotal := oldTotalsByKey[key]
+	reserved := reservedGlobal[globalKey]
+	if batchTrim != "" {
+		reserved = reservedByBatch[key]
+	}
+	available := onHand.Add(oldTotal).Sub(reserved)
+	onHandSource := "ledger"
+
+	if available.LessThan(newQty) {
+		if summaryOnHand, err := stockSummaryOnHand(tx.WithContext(ctx), businessId, warehouseId, productId, productType, batchTrim); err == nil {
+			summaryAvailable := summaryOnHand.Add(oldTotal).Sub(reserved)
+			if !summaryAvailable.IsNegative() && summaryAvailable.GreaterThanOrEqual(newQty) {
+				time.Sleep(300 * time.Millisecond)
+				rows2, err := InventorySnapshotByProductWarehouse(ctx, asOf, &warehouseId, &pid, &pt, batchPtr)
+				if err == nil {
+					onHand2 := decimal.Zero
+					for _, r := range rows2 {
+						onHand2 = onHand2.Add(r.StockOnHand)
+					}
+					available2 := onHand2.Add(oldTotal).Sub(reserved)
+					if available2.GreaterThanOrEqual(newQty) {
+						onHand = onHand2
+						available = available2
+						goto ledgerOKEdit
+					}
+				}
+				logInvoiceStockDecision(logrus.Fields{
+					"business_id":                businessId,
+					"product_id":                 productId,
+					"product_type":               productType,
+					"warehouse_id":               warehouseId,
+					"invoice_id":                 invoiceId,
+					"line_id":                    lineId,
+					"on_hand_source":             "summary",
+					"on_hand_qty":                summaryOnHand.String(),
+					"old_qty":                    oldLineQty.String(),
+					"old_qty_total_for_key":      oldTotal.String(),
+					"new_qty":                    newQty.String(),
+					"allow_negative_stock":       false,
+					"as_of_date":                 asOf,
+					"computed_available_for_edit": summaryAvailable.String(),
+					"decision":                   "blocked",
+				}, "invoice.stock.validation.failed")
+				return fmt.Errorf("stock is still being posted for %s. Please wait a moment and try again", strings.TrimSpace(itemName))
+			}
+		}
+		logInvoiceStockDecision(logrus.Fields{
+			"business_id":                businessId,
+			"product_id":                 productId,
+			"product_type":               productType,
+			"warehouse_id":               warehouseId,
+			"invoice_id":                 invoiceId,
+			"line_id":                    lineId,
+			"on_hand_source":             onHandSource,
+			"on_hand_qty":                onHand.String(),
+			"old_qty":                    oldLineQty.String(),
+			"old_qty_total_for_key":      oldTotal.String(),
+			"new_qty":                    newQty.String(),
+			"allow_negative_stock":       false,
+			"as_of_date":                 asOf,
+			"computed_available_for_edit": available.String(),
+			"decision":                   "blocked",
+		}, "invoice.stock.validation.failed")
+		return fmt.Errorf("insufficient stock on hand for %s (available=%s, invoice_qty=%s)", strings.TrimSpace(itemName), available.String(), newQty.String())
+	}
+
+ledgerOKEdit:
+	if batchTrim == "" {
+		reservedGlobal[globalKey] = reservedGlobal[globalKey].Add(newQty)
+	} else {
+		reservedByBatch[key] = reservedByBatch[key].Add(newQty)
+		reservedGlobal[globalKey] = reservedGlobal[globalKey].Add(newQty)
+	}
+
+	logInvoiceStockDecision(logrus.Fields{
+		"business_id":                businessId,
+		"product_id":                 productId,
+		"product_type":               productType,
+		"warehouse_id":               warehouseId,
+		"invoice_id":                 invoiceId,
+		"line_id":                    lineId,
+		"on_hand_source":             onHandSource,
+		"on_hand_qty":                onHand.String(),
+		"old_qty":                    oldLineQty.String(),
+		"old_qty_total_for_key":      oldTotal.String(),
+		"new_qty":                    newQty.String(),
+		"allow_negative_stock":       false,
+		"as_of_date":                 asOf,
+		"computed_available_for_edit": available.String(),
+		"decision":                   "allowed",
+	}, "invoice.stock.validation.ok")
+	return nil
 }
 
 func CreateSalesInvoice(ctx context.Context, input *NewSalesInvoice) (*SalesInvoice, error) {
@@ -826,6 +984,39 @@ func UpdateSalesInvoice(ctx context.Context, invoiceId int, updatedInvoice *NewS
 	// Iterate through the updated items
 
 	tx := db.Begin()
+	validateStockOnUpdate := updatedInvoice.CurrentStatus == SalesInvoiceStatusConfirmed
+	reservedGlobal := make(map[string]decimal.Decimal)
+	reservedByBatch := make(map[string]decimal.Decimal)
+	oldTotalsByKey := make(map[string]decimal.Decimal)
+	includeOldTotals := false
+	if validateStockOnUpdate && oldStatus == SalesInvoiceStatusConfirmed && oldWarehouseId == nil {
+		if oldInvoiceDate == nil {
+			includeOldTotals = true
+		} else if !oldInvoiceDate.After(updatedInvoice.InvoiceDate) {
+			// Old invoice rows are included in ledger snapshots for new as-of date.
+			includeOldTotals = true
+		}
+	}
+	if includeOldTotals {
+		for _, d := range existingInvoiceDetails {
+			if d.ProductId <= 0 {
+				continue
+			}
+			if d.ProductType != ProductTypeSingle && d.ProductType != ProductTypeVariant {
+				continue
+			}
+			product, err := GetProductOrVariant(ctx, string(d.ProductType), d.ProductId)
+			if err != nil {
+				tx.Rollback()
+				return nil, err
+			}
+			if product.GetInventoryAccountID() == 0 {
+				continue
+			}
+			key := invoiceStockKey(d.ProductId, d.ProductType, d.BatchNumber)
+			oldTotalsByKey[key] = oldTotalsByKey[key].Add(d.DetailQty)
+		}
+	}
 	for _, updatedItem := range updatedInvoice.Details {
 		var existingItem *SalesInvoiceDetail
 
@@ -834,6 +1025,44 @@ func UpdateSalesInvoice(ctx context.Context, invoiceId int, updatedInvoice *NewS
 			if item.ID == updatedItem.DetailId {
 				existingItem = &item
 				break
+			}
+		}
+
+		// Consistent stock validation for edits (ledger as-of invoice date, plus old confirmed qty).
+		oldLineQty := decimal.Zero
+		if existingItem != nil {
+			oldLineQty = existingItem.DetailQty
+		}
+		if validateStockOnUpdate && updatedItem.ProductId > 0 &&
+			(updatedItem.ProductType == ProductTypeSingle || updatedItem.ProductType == ProductTypeVariant) &&
+			(updatedItem.IsDeletedItem == nil || !*updatedItem.IsDeletedItem) {
+			product, err := GetProductOrVariant(ctx, string(updatedItem.ProductType), updatedItem.ProductId)
+			if err != nil {
+				tx.Rollback()
+				return nil, err
+			}
+			if product.GetInventoryAccountID() > 0 {
+				if err := validateInvoiceEditStock(
+					tx,
+					ctx,
+					businessId,
+					existingInvoice.ID,
+					updatedItem.DetailId,
+					updatedInvoice.InvoiceDate,
+					updatedInvoice.WarehouseId,
+					updatedItem.ProductId,
+					updatedItem.ProductType,
+					updatedItem.BatchNumber,
+					updatedItem.Name,
+					updatedItem.DetailQty,
+					oldLineQty,
+					oldTotalsByKey,
+					reservedGlobal,
+					reservedByBatch,
+				); err != nil {
+					tx.Rollback()
+					return nil, err
+				}
 			}
 		}
 
@@ -857,14 +1086,7 @@ func UpdateSalesInvoice(ctx context.Context, invoiceId int, updatedInvoice *NewS
 				SalesOrderItemId:   updatedItem.SalesOrderItemId,
 			}
 
-			// Option A UX: allow Draft edits without stock validation.
-			// Only validate stock when the invoice is being Confirmed.
-			if updatedInvoice.CurrentStatus == SalesInvoiceStatusConfirmed {
-				if err := ValidateProductStock(tx, ctx, businessId, updatedInvoice.WarehouseId, updatedItem.BatchNumber, updatedItem.ProductType, updatedItem.ProductId, updatedItem.DetailQty); err != nil {
-					tx.Rollback()
-					return nil, err
-				}
-			}
+			// Stock validation handled by validateInvoiceEditStock above.
 			// if updatedItem.ProductType != ProductTypeInput {
 			// 	currentStock, err := GetProductStock(ctx, businessId, updatedItem.ProductType, updatedItem.ProductId)
 			// 	if err != nil {
@@ -1022,16 +1244,7 @@ func UpdateSalesInvoice(ctx context.Context, invoiceId int, updatedInvoice *NewS
 						// newly confirm
 						if existingInvoice.CurrentStatus == SalesInvoiceStatusConfirmed && oldStatus == SalesInvoiceStatusDraft {
 							// check for stock availablity
-							if err := ValidateProductStock(tx, ctx,
-								businessId,
-								existingInvoice.WarehouseId,
-								existingItem.BatchNumber,
-								existingItem.ProductType,
-								existingItem.ProductId,
-								existingItem.DetailQty); err != nil {
-								tx.Rollback()
-								return nil, err
-							}
+							// Stock validation handled by validateInvoiceEditStock above.
 							if err := UpdateStockSummarySaleQty(tx,
 								businessId,
 								existingInvoice.WarehouseId,
@@ -1093,11 +1306,7 @@ func UpdateSalesInvoice(ctx context.Context, invoiceId int, updatedInvoice *NewS
 									tx.Rollback()
 									return nil, err
 								}
-								// check for stock availablity
-								if err := ValidateProductStock(tx, ctx, businessId, existingInvoice.WarehouseId, existingItem.BatchNumber, existingItem.ProductType, existingItem.ProductId, addedQty); err != nil {
-									tx.Rollback()
-									return nil, err
-								}
+								// Stock validation handled by validateInvoiceEditStock above.
 								// add new stock
 								if err := UpdateStockSummarySaleQty(tx, businessId,
 									existingInvoice.WarehouseId,
@@ -1115,10 +1324,7 @@ func UpdateSalesInvoice(ctx context.Context, invoiceId int, updatedInvoice *NewS
 
 								addedQty := existingItem.DetailQty.Sub(*oldDetailQty)
 								if addedQty.IsPositive() {
-									if err := ValidateProductStock(tx, ctx, businessId, existingInvoice.WarehouseId, existingItem.BatchNumber, existingItem.ProductType, existingItem.ProductId, addedQty); err != nil {
-										tx.Rollback()
-										return nil, err
-									}
+									// Stock validation handled by validateInvoiceEditStock above.
 								}
 								// lock business
 								err := utils.BusinessLock(ctx, businessId, "stockLock", "modelHoodsStockSummary.go", "SaleInvoiceDetailBeforeUpdate")
