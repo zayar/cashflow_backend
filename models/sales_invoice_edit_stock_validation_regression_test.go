@@ -86,6 +86,19 @@ func TestSalesInvoiceEditUsesAsOfStockAndOldQty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProduct: %v", err)
 	}
+	snack, err := models.CreateProduct(ctx, &models.NewProduct{
+		Name:               "B Snack",
+		Sku:                "SNACK-001",
+		Barcode:            "SNACK-001",
+		UnitId:             unit.ID,
+		SalesAccountId:     salesAcc,
+		PurchaseAccountId:  purchaseAcc,
+		InventoryAccountId: invAcc,
+		IsBatchTracking:    utils.NewFalse(),
+	})
+	if err != nil {
+		t.Fatalf("CreateProduct(snack): %v", err)
+	}
 
 	customer, err := models.CreateCustomer(ctx, &models.NewCustomer{
 		Name:                 "Customer A",
@@ -110,7 +123,7 @@ func TestSalesInvoiceEditUsesAsOfStockAndOldQty(t *testing.T) {
 	}
 	logger := logrus.New()
 	tx := db.Begin()
-	opening := &models.StockHistory{
+	openingBeer := &models.StockHistory{
 		BusinessId:         businessID,
 		WarehouseId:        primary.ID,
 		ProductId:          beer.ID,
@@ -126,15 +139,39 @@ func TestSalesInvoiceEditUsesAsOfStockAndOldQty(t *testing.T) {
 		IsTransferIn:       utils.NewFalse(),
 		CumulativeSequence: 0,
 	}
-	if err := tx.WithContext(ctx).Create(opening).Error; err != nil {
+	openingSnack := &models.StockHistory{
+		BusinessId:         businessID,
+		WarehouseId:        primary.ID,
+		ProductId:          snack.ID,
+		ProductType:        models.ProductTypeSingle,
+		BatchNumber:        "",
+		StockDate:          stockDate,
+		Qty:                decimal.NewFromInt(2),
+		BaseUnitValue:      decimal.NewFromInt(10000),
+		Description:        "Opening Stock",
+		ReferenceType:      models.StockReferenceTypeProductOpeningStock,
+		ReferenceID:        snack.ID,
+		IsOutgoing:         utils.NewFalse(),
+		IsTransferIn:       utils.NewFalse(),
+		CumulativeSequence: 0,
+	}
+	if err := tx.WithContext(ctx).Create(openingBeer).Error; err != nil {
 		tx.Rollback()
 		t.Fatalf("create opening: %v", err)
+	}
+	if err := tx.WithContext(ctx).Create(openingSnack).Error; err != nil {
+		tx.Rollback()
+		t.Fatalf("create opening snack: %v", err)
 	}
 	if err := models.UpdateStockSummaryOpeningQty(tx.WithContext(ctx), businessID, primary.ID, beer.ID, string(models.ProductTypeSingle), "", decimal.NewFromInt(10), stockDate); err != nil {
 		tx.Rollback()
 		t.Fatalf("UpdateStockSummaryOpeningQty: %v", err)
 	}
-	if _, err := workflow.ProcessIncomingStocks(tx.WithContext(ctx), logger, []*models.StockHistory{opening}); err != nil {
+	if err := models.UpdateStockSummaryOpeningQty(tx.WithContext(ctx), businessID, primary.ID, snack.ID, string(models.ProductTypeSingle), "", decimal.NewFromInt(2), stockDate); err != nil {
+		tx.Rollback()
+		t.Fatalf("UpdateStockSummaryOpeningQty(snack): %v", err)
+	}
+	if _, err := workflow.ProcessIncomingStocks(tx.WithContext(ctx), logger, []*models.StockHistory{openingBeer, openingSnack}); err != nil {
 		tx.Rollback()
 		t.Fatalf("ProcessIncomingStocks(opening): %v", err)
 	}
@@ -277,6 +314,79 @@ func TestSalesInvoiceEditUsesAsOfStockAndOldQty(t *testing.T) {
 		t.Fatalf("inv1 update workflow commit: %v", err)
 	}
 
+	// Edit inv1: add a new line item (should PASS using as-of date stock).
+	_, err = models.UpdateSalesInvoice(ctx, inv1.ID, &models.NewSalesInvoice{
+		CustomerId:          customer.ID,
+		BranchId:            biz.PrimaryBranchId,
+		InvoiceDate:         invDate1,
+		InvoicePaymentTerms: models.PaymentTermsDueOnReceipt,
+		CurrencyId:          biz.BaseCurrencyId,
+		ExchangeRate:        decimal.NewFromInt(1),
+		WarehouseId:         primary.ID,
+		IsTaxInclusive:      &isTaxInclusive,
+		CurrentStatus:       models.SalesInvoiceStatusConfirmed,
+		Details: []models.NewSalesInvoiceDetail{
+			{
+				DetailId:       detailID,
+				ProductId:      beer.ID,
+				ProductType:    models.ProductTypeSingle,
+				BatchNumber:    "",
+				Name:           "A Beer",
+				Description:    "",
+				DetailQty:      decimal.NewFromInt(5),
+				DetailUnitRate: decimal.NewFromInt(50000),
+			},
+			{
+				ProductId:      snack.ID,
+				ProductType:    models.ProductTypeSingle,
+				BatchNumber:    "",
+				Name:           "B Snack",
+				Description:    "",
+				DetailQty:      decimal.NewFromInt(1),
+				DetailUnitRate: decimal.NewFromInt(10000),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateSalesInvoice(inv1 add snack) unexpected error: %v", err)
+	}
+	var inv1AddOutbox models.PubSubMessageRecord
+	if err := db.WithContext(ctx).
+		Where("business_id = ? AND reference_type = ? AND reference_id = ? AND action = ?",
+			businessID, models.AccountReferenceTypeInvoice, inv1.ID, models.PubSubMessageActionUpdate).
+		Order("id DESC").
+		First(&inv1AddOutbox).Error; err != nil {
+		t.Fatalf("expected outbox record for inv1 add snack: %v", err)
+	}
+	wtxAdd := db.Begin()
+	if err := workflow.ProcessInvoiceWorkflow(wtxAdd, logger, models.ConvertToPubSubMessage(inv1AddOutbox)); err != nil {
+		t.Fatalf("ProcessInvoiceWorkflow(inv1 add snack): %v", err)
+	}
+	if err := wtxAdd.Commit().Error; err != nil {
+		t.Fatalf("inv1 add snack workflow commit: %v", err)
+	}
+
+	// Reload invoice 1 to get detail ids for both lines.
+	var inv1Reload2 models.SalesInvoice
+	if err := db.WithContext(ctx).Preload("Details").
+		Where("business_id = ? AND id = ?", businessID, inv1.ID).
+		First(&inv1Reload2).Error; err != nil {
+		t.Fatalf("reload inv1 after snack: %v", err)
+	}
+	var beerDetailID int
+	var snackDetailID int
+	for _, d := range inv1Reload2.Details {
+		switch d.ProductId {
+		case beer.ID:
+			beerDetailID = d.ID
+		case snack.ID:
+			snackDetailID = d.ID
+		}
+	}
+	if beerDetailID == 0 || snackDetailID == 0 {
+		t.Fatalf("expected detail ids for beer and snack after update")
+	}
+
 	// Edit inv1: increase qty beyond available-for-edit (should FAIL).
 	_, err = models.UpdateSalesInvoice(ctx, inv1.ID, &models.NewSalesInvoice{
 		CustomerId:          customer.ID,
@@ -288,16 +398,28 @@ func TestSalesInvoiceEditUsesAsOfStockAndOldQty(t *testing.T) {
 		WarehouseId:         primary.ID,
 		IsTaxInclusive:      &isTaxInclusive,
 		CurrentStatus:       models.SalesInvoiceStatusConfirmed,
-		Details: []models.NewSalesInvoiceDetail{{
-			DetailId:       detailID,
-			ProductId:      beer.ID,
-			ProductType:    models.ProductTypeSingle,
-			BatchNumber:    "",
-			Name:           "A Beer",
-			Description:    "",
-			DetailQty:      decimal.NewFromInt(11),
-			DetailUnitRate: decimal.NewFromInt(50000),
-		}},
+		Details: []models.NewSalesInvoiceDetail{
+			{
+				DetailId:       beerDetailID,
+				ProductId:      beer.ID,
+				ProductType:    models.ProductTypeSingle,
+				BatchNumber:    "",
+				Name:           "A Beer",
+				Description:    "",
+				DetailQty:      decimal.NewFromInt(11),
+				DetailUnitRate: decimal.NewFromInt(50000),
+			},
+			{
+				DetailId:       snackDetailID,
+				ProductId:      snack.ID,
+				ProductType:    models.ProductTypeSingle,
+				BatchNumber:    "",
+				Name:           "B Snack",
+				Description:    "",
+				DetailQty:      decimal.NewFromInt(1),
+				DetailUnitRate: decimal.NewFromInt(10000),
+			},
+		},
 	})
 	if err == nil {
 		t.Fatalf("expected insufficient stock error for inv1->11, got nil")
