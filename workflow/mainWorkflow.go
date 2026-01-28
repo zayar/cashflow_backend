@@ -1904,6 +1904,61 @@ func ProcessOutgoingStocks(tx *gorm.DB, logger *logrus.Logger, stockHistories []
 	if len(stockHistories) <= 0 {
 		return accountIds, nil
 	}
+	// Detect backdated outgoing stock and rebuild deterministically from the earliest affected date.
+	type rebuildScopeKey struct {
+		BusinessId  string
+		WarehouseId int
+		ProductId   int
+		ProductType models.ProductType
+	}
+	rebuildStarts := make(map[rebuildScopeKey]time.Time)
+	rebuildIds := make(map[rebuildScopeKey][]int)
+	for _, sh := range stockHistories {
+		if sh == nil {
+			continue
+		}
+		key := rebuildScopeKey{
+			BusinessId:  sh.BusinessId,
+			WarehouseId: sh.WarehouseId,
+			ProductId:   sh.ProductId,
+			ProductType: sh.ProductType,
+		}
+		if existing, ok := rebuildStarts[key]; !ok || sh.StockDate.Before(existing) {
+			rebuildStarts[key] = sh.StockDate
+		}
+		if sh.ID > 0 {
+			rebuildIds[key] = append(rebuildIds[key], sh.ID)
+		}
+	}
+	rebuildKeys := make(map[rebuildScopeKey]time.Time)
+	for key, startDate := range rebuildStarts {
+		var otherOutgoingCount int64
+		q := tx.Model(&models.StockHistory{}).
+			Where("business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ?",
+				key.BusinessId, key.WarehouseId, key.ProductId, key.ProductType).
+			Where("is_outgoing = 1 AND stock_date >= ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL", startDate)
+		if ids := rebuildIds[key]; len(ids) > 0 {
+			q = q.Where("id NOT IN ?", ids)
+		}
+		if err = q.Count(&otherOutgoingCount).Error; err != nil {
+			config.LogError(logger, "MainWorkflow.go", "ProcessOutgoingStocks", "CountOutgoingForRebuild", key, err)
+			return accountIds, err
+		}
+		if otherOutgoingCount > 0 {
+			rebuildKeys[key] = startDate
+		}
+	}
+	for key, startDate := range rebuildKeys {
+		ids, err := RebuildInventoryForItemWarehouseFromDate(
+			tx, logger, key.BusinessId, key.WarehouseId, key.ProductId, key.ProductType, "", startDate,
+		)
+		if err != nil {
+			return accountIds, err
+		}
+		if len(ids) > 0 {
+			accountIds = utils.MergeIntSlices(accountIds, ids)
+		}
+	}
 	// Guardrail for backdated outgoing: only revalue outgoing rows up to the
 	// max stock_date in the batch being processed. This prevents future
 	// transactions from blocking backdated invoices with false FIFO shortages.
@@ -1942,6 +1997,19 @@ func ProcessOutgoingStocks(tx *gorm.DB, logger *logrus.Logger, stockHistories []
 	}
 
 	for _, stockHistory := range stockHistories {
+		if stockHistory == nil {
+			continue
+		}
+		rk := rebuildScopeKey{
+			BusinessId:  stockHistory.BusinessId,
+			WarehouseId: stockHistory.WarehouseId,
+			ProductId:   stockHistory.ProductId,
+			ProductType: stockHistory.ProductType,
+		}
+		if _, shouldSkip := rebuildKeys[rk]; shouldSkip {
+			// Already rebuilt deterministically for this key.
+			continue
+		}
 
 		productDetail, err := GetProductDetail(tx, stockHistory.ProductId, stockHistory.ProductType)
 		if err != nil {
