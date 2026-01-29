@@ -58,6 +58,7 @@ LEFT JOIN currencies ON currencies.id = po.currency_id
 LEFT JOIN suppliers ON suppliers.id = po.supplier_id
 	WHERE po.business_id = @businessId
 	AND po.order_date BETWEEN @fromDate AND @toDate
+    AND po.current_status NOT IN ('Draft', 'Void')
 	{{- if .branchId }} AND po.branch_id = @branchId {{- end }}
 	{{- if .warehouseId }} AND po.warehouse_id = @warehouseId {{- end }}
 `

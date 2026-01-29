@@ -59,9 +59,24 @@ SELECT
     customers.name customer_name
 FROM
     credit_notes cn
+    LEFT JOIN (
+        SELECT
+            reference_id,
+            MAX(id) AS max_id
+        FROM
+            pub_sub_message_records
+        WHERE
+            business_id = @businessId
+            AND reference_type = 'CN'
+        GROUP BY
+            reference_id
+    ) cn_outbox_latest ON cn_outbox_latest.reference_id = cn.id
+    LEFT JOIN pub_sub_message_records cn_outbox ON cn_outbox.id = cn_outbox_latest.max_id
     LEFT JOIN customers ON customers.id = cn.customer_id
 	WHERE cn.business_id = @businessId
 	AND cn.credit_note_date BETWEEN @fromDate AND @toDate
+    AND cn.current_status NOT IN ('Draft', 'Void')
+    AND (cn_outbox.processing_status IS NULL OR cn_outbox.processing_status <> 'DEAD')
 	{{- if .branchId }} AND cn.branch_id = @branchId {{- end }}
 	{{- if .warehouseId }} AND cn.warehouse_id = @warehouseId {{- end }}
 ORDER BY cn.credit_note_date;

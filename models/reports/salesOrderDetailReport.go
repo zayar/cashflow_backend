@@ -59,6 +59,7 @@ FROM
 WHERE
     so.business_id = @businessId
 	AND so.order_date BETWEEN @fromDate AND @toDate
+    AND so.current_status NOT IN ('Draft', 'Void')
 	{{- if .branchId }} AND so.branch_id = @branchId {{- end }}
 	{{- if .warehouseId }} AND so.warehouse_id = @warehouseId {{- end }}
 `

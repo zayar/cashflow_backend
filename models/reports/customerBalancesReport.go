@@ -39,10 +39,22 @@ WITH AvailableAdvance AS (
     where
         business_id = @businessId
         {{- if .branchId }} AND branch_id = @branchId {{- end }}
-        AND NOT cca.current_status IN ('Draft')  AND cca.date <= @toDate
+        AND NOT cca.current_status IN ('Draft', 'Void')  AND cca.date <= @toDate
     group by
         cca.customer_id,
         cca.currency_id
+),
+LatestCreditNoteOutbox AS (
+    SELECT
+        reference_id,
+        MAX(id) AS max_id
+    FROM
+        pub_sub_message_records
+    WHERE
+        business_id = @businessId
+        AND reference_type = 'CN'
+    GROUP BY
+        reference_id
 ),
 AvailableCredit AS (
     SELECT
@@ -52,10 +64,13 @@ AvailableCredit AS (
         cn.currency_id
     from
         credit_notes cn
+        LEFT JOIN LatestCreditNoteOutbox lcn ON lcn.reference_id = cn.id
+        LEFT JOIN pub_sub_message_records cn_outbox ON cn_outbox.id = lcn.max_id
     where
         business_id = @businessId
         {{- if .branchId }} AND branch_id = @branchId {{- end }}
         AND NOT cn.current_status IN ('Draft', 'Void') AND credit_note_date <= @toDate
+        AND (cn_outbox.processing_status IS NULL OR cn_outbox.processing_status <> 'DEAD')
     group by
         cn.customer_id,
         cn.currency_id
@@ -291,6 +306,18 @@ WITH AccTransactionSummary AS
         aj.customer_id,
         currency_id
 ),
+LatestCreditNoteOutbox AS (
+    SELECT
+        reference_id,
+        MAX(id) AS max_id
+    FROM
+        pub_sub_message_records
+    WHERE
+        business_id = @businessId
+        AND reference_type = 'CN'
+    GROUP BY
+        reference_id
+),
 AvailableCredit AS (
     SELECT
         (case when currency_id = @baseCurrencyId then 0 else SUM(cn.remaining_balance) end) amount,
@@ -299,10 +326,13 @@ AvailableCredit AS (
         cn.currency_id
     from
         credit_notes cn
+        LEFT JOIN LatestCreditNoteOutbox lcn ON lcn.reference_id = cn.id
+        LEFT JOIN pub_sub_message_records cn_outbox ON cn_outbox.id = lcn.max_id
     where
         cn.business_id = @businessId
         {{- if .branchId }} AND cn.branch_id = @branchId {{- end }}
-        AND NOT cn.current_status IN ('Draft')
+        AND NOT cn.current_status IN ('Draft', 'Void')
+        AND (cn_outbox.processing_status IS NULL OR cn_outbox.processing_status <> 'DEAD')
         {{- if .toDate }} AND cn.credit_note_date <= @transactionDate {{- end }}
     group by
         cn.customer_id,

@@ -29,7 +29,19 @@ func GetARAgingSummaryReport(ctx context.Context, currentDate models.MyDateStrin
 
 	var results []*ARAgingSummaryResponse
 	sqlTemplate := `
-    WITH InvoiceAging AS (
+    WITH LatestInvoiceOutbox AS (
+        SELECT
+            reference_id,
+            MAX(id) AS max_id
+        FROM
+            pub_sub_message_records
+        WHERE
+            business_id = @businessId
+            AND reference_type = 'IV'
+        GROUP BY
+            reference_id
+    ),
+    InvoiceAging AS (
  SELECT
         si.customer_id,
         si.currency_id,
@@ -52,10 +64,13 @@ func GetARAgingSummaryReport(ctx context.Context, currentDate models.MyDateStrin
         END AS days_overdue
     FROM
         sales_invoices si
+        LEFT JOIN LatestInvoiceOutbox lio ON lio.reference_id = si.id
+        LEFT JOIN pub_sub_message_records iv_outbox ON iv_outbox.id = lio.max_id
     WHERE
         si.business_id = @businessId
         AND invoice_date < @currentDate
         AND si.current_status IN ('Confirmed', 'Partial Paid')
+        AND (iv_outbox.processing_status IS NULL OR iv_outbox.processing_status <> 'DEAD')
         {{- if .branchId }} AND branch_id = @branchId {{- end}}
         {{- if .warehouseId }} AND warehouse_id = @warehouseId {{- end}}
 )

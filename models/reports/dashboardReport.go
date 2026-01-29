@@ -95,7 +95,19 @@ func GetTotalPayableReceivable(ctx context.Context) ([]*PayableReceivableRespons
 	var payableReceivableResponse PayableReceivableResponse
 
 	payableQuery := `
-    WITH Payable AS (
+    WITH LatestBillOutbox AS (
+        SELECT
+            reference_id,
+            MAX(id) AS max_id
+        FROM
+            pub_sub_message_records
+        WHERE
+            business_id = ?
+            AND reference_type = 'BL'
+        GROUP BY
+            reference_id
+    ),
+    Payable AS (
         SELECT
             b.supplier_id,
             b.currency_id,
@@ -110,11 +122,14 @@ func GetTotalPayableReceivable(ctx context.Context) ([]*PayableReceivableRespons
             END AS days_overdue
         FROM
             bills b
+            LEFT JOIN LatestBillOutbox lbo ON lbo.reference_id = b.id
+            LEFT JOIN pub_sub_message_records b_outbox ON b_outbox.id = lbo.max_id
         WHERE
             b.business_id = ?
             AND b.bill_date < ?
             AND b.current_status IN ?
 			AND b.remaining_balance > 0
+            AND (b_outbox.processing_status IS NULL OR b_outbox.processing_status <> 'DEAD')
     )
     SELECT
         SUM(adjusted_remaining_balance) as total,
@@ -152,7 +167,19 @@ func GetTotalPayableReceivable(ctx context.Context) ([]*PayableReceivableRespons
         Payable;`
 
 	receivableQuery := `
-    WITH Receivable AS (
+    WITH LatestInvoiceOutbox AS (
+        SELECT
+            reference_id,
+            MAX(id) AS max_id
+        FROM
+            pub_sub_message_records
+        WHERE
+            business_id = ?
+            AND reference_type = 'IV'
+        GROUP BY
+            reference_id
+    ),
+    Receivable AS (
         SELECT
             CASE
                 WHEN inv.currency_id = ? THEN inv.remaining_balance
@@ -164,11 +191,14 @@ func GetTotalPayableReceivable(ctx context.Context) ([]*PayableReceivableRespons
             END AS days_overdue
         FROM
             sales_invoices inv
+            LEFT JOIN LatestInvoiceOutbox lio ON lio.reference_id = inv.id
+            LEFT JOIN pub_sub_message_records iv_outbox ON iv_outbox.id = lio.max_id
         WHERE
             inv.business_id = ?
             AND inv.invoice_date < ?
             AND inv.current_status IN ?
 			AND inv.remaining_balance > 0
+            AND (iv_outbox.processing_status IS NULL OR iv_outbox.processing_status <> 'DEAD')
     )
     SELECT
         SUM(adjusted_remaining_balance) as total,
@@ -207,14 +237,14 @@ func GetTotalPayableReceivable(ctx context.Context) ([]*PayableReceivableRespons
 
 	//  payable query
 	if err := db.Raw(payableQuery,
-		business.BaseCurrencyId, currentDate, businessId, currentDate, billStatus).
+		businessId, business.BaseCurrencyId, currentDate, businessId, currentDate, billStatus).
 		Scan(&payableReceivableResponse.TotalPayable).Error; err != nil {
 		return nil, err
 	}
 
 	// receivable query
 	if err := db.Raw(receivableQuery,
-		business.BaseCurrencyId, currentDate, businessId, currentDate, invoiceStatus).
+		businessId, business.BaseCurrencyId, currentDate, businessId, currentDate, invoiceStatus).
 		Scan(&payableReceivableResponse.TotalReceivable).Error; err != nil {
 		return nil, err
 	}

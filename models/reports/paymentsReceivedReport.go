@@ -70,7 +70,7 @@ WITH CPM AS(
         AND btx.transaction_type = 'CustomerAdvance'
     WHERE
 		cca.business_id = @businessId
-        AND NOT cca.current_status = 'Draft'
+        AND NOT cca.current_status IN ('Draft', 'Void')
         AND cca.date BETWEEN @fromDate
         AND @toDate)
     UNION
@@ -102,10 +102,25 @@ WITH CPM AS(
         customer_payments cp
         INNER JOIN paid_invoices ON cp.id = paid_invoices.customer_payment_id
         INNER JOIN sales_invoices ON sales_invoices.id = paid_invoices.invoice_id
+        LEFT JOIN (
+            SELECT
+                reference_id,
+                MAX(id) AS max_id
+            FROM
+                pub_sub_message_records
+            WHERE
+                business_id = @businessId
+                AND reference_type = 'IV'
+            GROUP BY
+                reference_id
+        ) iv_outbox_latest ON iv_outbox_latest.reference_id = sales_invoices.id
+        LEFT JOIN pub_sub_message_records iv_outbox ON iv_outbox.id = iv_outbox_latest.max_id
     WHERE
         cp.business_id = @businessId
         AND cp.payment_date BETWEEN @fromDate
         AND @toDate
+        AND sales_invoices.current_status NOT IN ('Draft', 'Void')
+        AND (iv_outbox.processing_status IS NULL OR iv_outbox.processing_status <> 'DEAD')
     GROUP BY
         cp.id)
 )

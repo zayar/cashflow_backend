@@ -138,6 +138,10 @@ func markOutboxProcessFailure(ctx context.Context, logger *logrus.Logger, m conf
 		}).Error("outbox processing failed: " + errMsg)
 	}
 
+	if status == models.OutboxProcessStatusDead {
+		revertInvoiceToDraftOnDead(ctx, logger, m)
+	}
+
 	return status == models.OutboxProcessStatusDead
 }
 

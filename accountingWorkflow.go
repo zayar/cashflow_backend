@@ -229,6 +229,7 @@ func ProcessMessage(ctx context.Context, logger *logrus.Logger, m config.PubSubM
 						"message_id":     m.ID,
 					}).Warn("posting gate blocked message: " + err.Error())
 				}
+				revertInvoiceToDraftOnDead(ctx, logger, m)
 				// Ack/drop permanently (do not retry); message would otherwise loop forever.
 				return nil
 			}

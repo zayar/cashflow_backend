@@ -30,7 +30,19 @@ func GetAPAgingSummaryReport(ctx context.Context, currentDate models.MyDateStrin
 	var results []*APAgingSummaryResponse
 	sqlTemplate := `
 
-WITH BillAging AS (
+WITH LatestBillOutbox AS (
+    SELECT
+        reference_id,
+        MAX(id) AS max_id
+    FROM
+        pub_sub_message_records
+    WHERE
+        business_id = @businessId
+        AND reference_type = 'BL'
+    GROUP BY
+        reference_id
+),
+BillAging AS (
     SELECT
         b.supplier_id,
         b.currency_id,
@@ -52,10 +64,13 @@ WITH BillAging AS (
         END AS days_overdue
     FROM
         bills b
+        LEFT JOIN LatestBillOutbox lbo ON lbo.reference_id = b.id
+        LEFT JOIN pub_sub_message_records b_outbox ON b_outbox.id = lbo.max_id
     WHERE
         b.business_id = @businessId
         AND bill_date < @currentDate
         AND b.current_status IN ('Confirmed', 'Partial Paid')
+        AND (b_outbox.processing_status IS NULL OR b_outbox.processing_status <> 'DEAD')
         {{- if .branchId }} AND branch_id = @branchId {{- end}}
         {{- if .warehouseId }} AND warehouse_id = @warehouseId {{- end}}
 )

@@ -47,10 +47,24 @@ FROM
             COUNT(sales_invoices.id) AS invoice_count
     FROM
         sales_invoices
+        LEFT JOIN (
+            SELECT
+                reference_id,
+                MAX(id) AS max_id
+            FROM
+                pub_sub_message_records
+            WHERE
+                business_id = @businessId
+                AND reference_type = 'IV'
+            GROUP BY
+                reference_id
+        ) invoice_outbox_latest ON invoice_outbox_latest.reference_id = sales_invoices.id
+        LEFT JOIN pub_sub_message_records invoice_outbox ON invoice_outbox.id = invoice_outbox_latest.max_id
     WHERE
         business_id = @businessId
             AND invoice_date BETWEEN @fromDate AND @toDate
             AND current_status IN ('Paid' , 'Partial Paid', 'Confirmed')
+            AND (invoice_outbox.processing_status IS NULL OR invoice_outbox.processing_status <> 'DEAD')
 		{{- if .branchId }} AND branch_id = @branchId {{- end }}
     GROUP BY customer_id) AS siv
         LEFT JOIN

@@ -28,13 +28,30 @@ func GetCustomerRefundHistoryReport(ctx context.Context, fromDate models.MyDateS
 
 	sql := `
 	
-WITH TransactionDetails AS (
+WITH LatestCreditNoteOutbox AS (
     SELECT
-        id transaction_id,
+        reference_id,
+        MAX(id) AS max_id
+    FROM
+        pub_sub_message_records
+    WHERE
+        business_id = @businessId
+        AND reference_type = 'CN'
+    GROUP BY
+        reference_id
+),
+TransactionDetails AS (
+    SELECT
+        cn.id transaction_id,
         'CN' transaction_type,
-        credit_note_number transaction_number
+        cn.credit_note_number transaction_number
     from
-        credit_notes
+        credit_notes cn
+        LEFT JOIN LatestCreditNoteOutbox lcn ON lcn.reference_id = cn.id
+        LEFT JOIN pub_sub_message_records cn_outbox ON cn_outbox.id = lcn.max_id
+    WHERE
+        cn.current_status NOT IN ('Draft', 'Void')
+        AND (cn_outbox.processing_status IS NULL OR cn_outbox.processing_status <> 'DEAD')
     UNION
     SELECT
         id transaction_id,

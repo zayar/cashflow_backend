@@ -54,10 +54,24 @@ WITH BillDetails AS (
     FROM
         bills b
         JOIN bill_details bd on bd.bill_id = b.id
+        LEFT JOIN (
+            SELECT
+                reference_id,
+                MAX(id) AS max_id
+            FROM
+                pub_sub_message_records
+            WHERE
+                business_id = @businessId
+                AND reference_type = 'BL'
+            GROUP BY
+                reference_id
+        ) bill_outbox_latest ON bill_outbox_latest.reference_id = b.id
+        LEFT JOIN pub_sub_message_records b_outbox ON b_outbox.id = bill_outbox_latest.max_id
     WHERE
 		b.business_id = @businessId
 		AND b.bill_date BETWEEN @fromDate AND @toDate
         AND b.current_status IN ('Confirmed', 'Paid', 'Partial Paid')
+        AND (b_outbox.processing_status IS NULL OR b_outbox.processing_status <> 'DEAD')
 		{{- if .branchId }} AND branch_id = @branchId {{- end }}
 		{{- if .warehouseId }} AND warehouse_id = @warehouseId {{- end }}
     GROUP BY

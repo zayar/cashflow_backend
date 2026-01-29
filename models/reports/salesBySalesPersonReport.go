@@ -31,7 +31,31 @@ type SalesBySalesPersonResponse struct {
 func GetSalesBySalesPersonReport(ctx context.Context, branchId *int, fromDate models.MyDateString, toDate models.MyDateString) ([]*SalesBySalesPersonResponse, error) {
 	var records []*SalesBySalesPersonResponse
 	sqlTemplate := `
-WITH SalesInvoices AS (
+WITH LatestInvoiceOutbox AS (
+    SELECT
+        reference_id,
+        MAX(id) AS max_id
+    FROM
+        pub_sub_message_records
+    WHERE
+        business_id = @businessId
+        AND reference_type = 'IV'
+    GROUP BY
+        reference_id
+),
+LatestCreditNoteOutbox AS (
+    SELECT
+        reference_id,
+        MAX(id) AS max_id
+    FROM
+        pub_sub_message_records
+    WHERE
+        business_id = @businessId
+        AND reference_type = 'CN'
+    GROUP BY
+        reference_id
+),
+SalesInvoices AS (
     SELECT
         sales_person_id AS spid,
         COUNT(id) AS invoiceCount,
@@ -40,9 +64,12 @@ WITH SalesInvoices AS (
         SUM(invoice_discount_amount * (CASE WHEN currency_id = @baseCurrencyId THEN 1 ELSE exchange_rate END)) AS totalInvoiceDiscount
     FROM
         sales_invoices
+        LEFT JOIN LatestInvoiceOutbox lio ON lio.reference_id = sales_invoices.id
+        LEFT JOIN pub_sub_message_records iv_outbox ON iv_outbox.id = lio.max_id
     WHERE
         invoice_date BETWEEN @fromDate AND @toDate
         AND current_status IN ('Paid', 'Partial Paid', 'Confirmed')
+        AND (iv_outbox.processing_status IS NULL OR iv_outbox.processing_status <> 'DEAD')
        {{- if .branchId }} AND branch_id = @branchId {{- end }}
     GROUP BY
         sales_person_id
@@ -56,9 +83,12 @@ CreditNotes as (
         SUM(credit_note_discount_amount * (CASE WHEN currency_id = @baseCurrencyId THEN 1 ELSE exchange_rate END)) AS totalCreditNoteDiscount
     FROM
         credit_notes
+        LEFT JOIN LatestCreditNoteOutbox lcn ON lcn.reference_id = credit_notes.id
+        LEFT JOIN pub_sub_message_records cn_outbox ON cn_outbox.id = lcn.max_id
     WHERE
         credit_note_date BETWEEN @fromDate AND @toDate
         AND current_status = 'Closed'
+        AND (cn_outbox.processing_status IS NULL OR cn_outbox.processing_status <> 'DEAD')
        {{- if .branchId }} AND branch_id = @branchId {{- end }}
     GROUP BY
         sales_person_id

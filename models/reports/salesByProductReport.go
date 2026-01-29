@@ -45,10 +45,24 @@ FROM
     sales_invoices AS iv
         JOIN
     sales_invoice_details AS iv_dt ON iv_dt.sales_invoice_id = iv.id
+        LEFT JOIN (
+            SELECT
+                reference_id,
+                MAX(id) AS max_id
+            FROM
+                pub_sub_message_records
+            WHERE
+                business_id = @businessId
+                AND reference_type = 'IV'
+            GROUP BY
+                reference_id
+        ) iv_outbox_latest ON iv_outbox_latest.reference_id = iv.id
+        LEFT JOIN pub_sub_message_records iv_outbox ON iv_outbox.id = iv_outbox_latest.max_id
 WHERE
     business_id = @businessId
         AND invoice_date BETWEEN @fromDate AND @toDate
         AND current_status IN ('Confirmed' , 'Partial Paid', 'Paid')
+        AND (iv_outbox.processing_status IS NULL OR iv_outbox.processing_status <> 'DEAD')
         {{- if .branchId }} AND branch_id = @branchId {{- end }}
         {{- if .warehouseId }} AND warehouse_id = @warehouseId {{- end }}
 GROUP BY iv_dt.product_id , iv_dt.product_type

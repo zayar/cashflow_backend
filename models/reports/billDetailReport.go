@@ -75,10 +75,25 @@ SELECT
 	suppliers.name AS supplier_name
 FROM
 	bills bill
+    LEFT JOIN (
+        SELECT
+            reference_id,
+            MAX(id) AS max_id
+        FROM
+            pub_sub_message_records
+        WHERE
+            business_id = @businessId
+            AND reference_type = 'BL'
+        GROUP BY
+            reference_id
+    ) bill_outbox_latest ON bill_outbox_latest.reference_id = bill.id
+    LEFT JOIN pub_sub_message_records bill_outbox ON bill_outbox.id = bill_outbox_latest.max_id
 LEFT JOIN currencies ON currencies.id = bill.currency_id
 LEFT JOIN suppliers ON suppliers.id = bill.supplier_id
 	WHERE bill.business_id = @businessId
 	AND bill.bill_date BETWEEN @fromDate AND @toDate
+    AND bill.current_status NOT IN ('Draft', 'Void')
+    AND (bill_outbox.processing_status IS NULL OR bill_outbox.processing_status <> 'DEAD')
 	{{- if .warehouseId }} AND bill.warehouse_id = @warehouseId {{- end }}
 	{{- if .branchId }} AND bill.branch_id = @branchId {{- end }}
 `

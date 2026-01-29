@@ -63,7 +63,19 @@ type ARAgingDetail struct {
 func GetARAgingDetailReport(ctx context.Context, currentDate models.MyDateString, branchID *int, warehouseID *int) ([]*ARAgingDetailResponse, error) {
 
 	sqlTemplate := `
-WITH InvoiceAging AS (
+WITH LatestInvoiceOutbox AS (
+    SELECT
+        reference_id,
+        MAX(id) AS max_id
+    FROM
+        pub_sub_message_records
+    WHERE
+        business_id = @businessId
+        AND reference_type = 'IV'
+    GROUP BY
+        reference_id
+),
+InvoiceAging AS (
     SELECT
         id,
         invoice_number,
@@ -103,10 +115,13 @@ WITH InvoiceAging AS (
         END AS days_overdue
     FROM
         sales_invoices
+        LEFT JOIN LatestInvoiceOutbox lio ON lio.reference_id = sales_invoices.id
+        LEFT JOIN pub_sub_message_records iv_outbox ON iv_outbox.id = lio.max_id
     where
 		business_id = @businessId
         AND current_status in ('Confirmed', 'Partial Paid')
         AND invoice_date < @currentDate
+        AND (iv_outbox.processing_status IS NULL OR iv_outbox.processing_status <> 'DEAD')
 		{{- if .warehouseId }} AND warehouse_id = @warehouseId {{- end }}
 		{{- if .branchId }} AND branch_id = @branchId {{- end }}
 )

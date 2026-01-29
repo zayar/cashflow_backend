@@ -38,7 +38,19 @@ type APAgingDetailResponse struct {
 func GetAPAgingDetailReport(ctx context.Context, currentDate models.MyDateString, branchID *int, warehouseID *int) ([]*APAgingDetailResponse, error) {
 
 	sqlTemplate := `
-WITH BillAging AS (
+WITH LatestBillOutbox AS (
+    SELECT
+        reference_id,
+        MAX(id) AS max_id
+    FROM
+        pub_sub_message_records
+    WHERE
+        business_id = @businessId
+        AND reference_type = 'BL'
+    GROUP BY
+        reference_id
+),
+BillAging AS (
     SELECT
         id,
         bill_number,
@@ -78,10 +90,13 @@ WITH BillAging AS (
         END AS days_overdue
     FROM
         bills
+        LEFT JOIN LatestBillOutbox lbo ON lbo.reference_id = bills.id
+        LEFT JOIN pub_sub_message_records b_outbox ON b_outbox.id = lbo.max_id
     where
         business_id = @businessId
         AND current_status in ('Confirmed', 'Partial Paid')
         AND bill_date < @currentDate
+        AND (b_outbox.processing_status IS NULL OR b_outbox.processing_status <> 'DEAD')
 		{{- if .warehouseId }} AND warehouse_id = @warehouseId {{- end }}
 		{{- if .branchId }} AND branch_id = @branchId {{- end }}
 )

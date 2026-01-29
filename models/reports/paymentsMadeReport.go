@@ -70,7 +70,7 @@ WITH SPM AS(
         AND btx.transaction_type = 'SupplierAdvance'
     WHERE
 		sca.business_id = @businessId
-        AND NOT sca.current_status = 'Draft'
+        AND NOT sca.current_status IN ('Draft', 'Void')
         AND sca.date BETWEEN @fromDate
         AND @toDate)
     UNION
@@ -102,10 +102,25 @@ WITH SPM AS(
         supplier_payments sp
         INNER JOIN supplier_paid_bills ON sp.id = supplier_paid_bills.supplier_payment_id
         INNER JOIN bills ON bills.id = supplier_paid_bills.bill_id
+        LEFT JOIN (
+            SELECT
+                reference_id,
+                MAX(id) AS max_id
+            FROM
+                pub_sub_message_records
+            WHERE
+                business_id = @businessId
+                AND reference_type = 'BL'
+            GROUP BY
+                reference_id
+        ) bill_outbox_latest ON bill_outbox_latest.reference_id = bills.id
+        LEFT JOIN pub_sub_message_records b_outbox ON b_outbox.id = bill_outbox_latest.max_id
     WHERE
         sp.business_id = @businessId
         AND sp.payment_date BETWEEN @fromDate
         AND @toDate
+        AND bills.current_status NOT IN ('Draft', 'Void')
+        AND (b_outbox.processing_status IS NULL OR b_outbox.processing_status <> 'DEAD')
     GROUP BY
         sp.id)
 )

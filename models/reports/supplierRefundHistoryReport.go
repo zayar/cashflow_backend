@@ -28,13 +28,30 @@ func GetSupplierRefundHistoryReport(ctx context.Context, fromDate models.MyDateS
 
 	sql := `
 	
-WITH TransactionDetails AS (
+WITH LatestSupplierCreditOutbox AS (
     SELECT
-        id transaction_id,
+        reference_id,
+        MAX(id) AS max_id
+    FROM
+        pub_sub_message_records
+    WHERE
+        business_id = @businessId
+        AND reference_type = 'SC'
+    GROUP BY
+        reference_id
+),
+TransactionDetails AS (
+    SELECT
+        sc.id transaction_id,
         'SC' transaction_type,
-        supplier_credit_number transaction_number
+        sc.supplier_credit_number transaction_number
     from
-		supplier_credits
+		supplier_credits sc
+        LEFT JOIN LatestSupplierCreditOutbox lsc ON lsc.reference_id = sc.id
+        LEFT JOIN pub_sub_message_records sc_outbox ON sc_outbox.id = lsc.max_id
+    WHERE
+        sc.current_status NOT IN ('Draft', 'Void')
+        AND (sc_outbox.processing_status IS NULL OR sc_outbox.processing_status <> 'DEAD')
     UNION
     SELECT
         id transaction_id,

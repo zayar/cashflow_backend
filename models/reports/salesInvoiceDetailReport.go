@@ -76,11 +76,26 @@ SELECT
     customers.name AS customer_name
 FROM
     sales_invoices invoice
+    LEFT JOIN (
+        SELECT
+            reference_id,
+            MAX(id) AS max_id
+        FROM
+            pub_sub_message_records
+        WHERE
+            business_id = @businessId
+            AND reference_type = 'IV'
+        GROUP BY
+            reference_id
+    ) invoice_outbox_latest ON invoice_outbox_latest.reference_id = invoice.id
+    LEFT JOIN pub_sub_message_records invoice_outbox ON invoice_outbox.id = invoice_outbox_latest.max_id
     LEFT JOIN currencies ON currencies.id = invoice.currency_id
     LEFT JOIN customers ON customers.id = invoice.customer_id
 WHERE
     invoice.business_id = @businessId
     AND invoice.invoice_date BETWEEN @fromDate AND @toDate
+    AND invoice.current_status NOT IN ('Draft', 'Void')
+    AND (invoice_outbox.processing_status IS NULL OR invoice_outbox.processing_status <> 'DEAD')
 	{{- if .warehouseId }} AND invoice.warehouse_id = @warehouseId {{- end }}
 	{{- if .branchId }} AND invoice.branch_id = @branchId {{- end }}
 `

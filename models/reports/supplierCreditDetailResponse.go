@@ -59,9 +59,24 @@ sc.current_status supplier_credit_status,
     suppliers.name supplier_name
 FROM
     supplier_credits sc
+    LEFT JOIN (
+        SELECT
+            reference_id,
+            MAX(id) AS max_id
+        FROM
+            pub_sub_message_records
+        WHERE
+            business_id = @businessId
+            AND reference_type = 'SC'
+        GROUP BY
+            reference_id
+    ) sc_outbox_latest ON sc_outbox_latest.reference_id = sc.id
+    LEFT JOIN pub_sub_message_records sc_outbox ON sc_outbox.id = sc_outbox_latest.max_id
 LEFT JOIN suppliers ON suppliers.id = sc.supplier_id
 	WHERE sc.business_id = @businessId
 	AND sc.supplier_credit_date BETWEEN @fromDate AND @toDate
+    AND sc.current_status NOT IN ('Draft', 'Void')
+    AND (sc_outbox.processing_status IS NULL OR sc_outbox.processing_status <> 'DEAD')
 	{{- if .branchId }} AND sc.branch_id = @branchId {{- end }}
 	{{- if .warehouseId }} AND sc.warehouse_id = @warehouseId {{- end }}
 ORDER BY sc.supplier_credit_date;

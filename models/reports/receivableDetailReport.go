@@ -29,11 +29,35 @@ type ReceivableDetailResponse struct {
 func GetReceivableDetailReport(ctx context.Context, startDate models.MyDateString, endDate models.MyDateString, customerID *int, branchID *int, warehouseID *int) ([]*ReceivableDetailResponse, error) {
 	sqlT := `
 
-WITH InvoiceDetail AS (
+WITH LatestInvoiceOutbox AS (
+    SELECT
+        reference_id,
+        MAX(id) AS max_id
+    FROM
+        pub_sub_message_records
+    WHERE
+        business_id = @businessId
+        AND reference_type = 'IV'
+    GROUP BY
+        reference_id
+),
+LatestCreditNoteOutbox AS (
+    SELECT
+        reference_id,
+        MAX(id) AS max_id
+    FROM
+        pub_sub_message_records
+    WHERE
+        business_id = @businessId
+        AND reference_type = 'CN'
+    GROUP BY
+        reference_id
+),
+InvoiceDetail AS (
     SELECT
         iv.invoice_date as receivable_date,
         (CASE
-            WHEN NOT iv.current_status = 'Draft' AND iv.remaining_balance > 0
+            WHEN NOT iv.current_status IN ('Draft', 'Void') AND iv.remaining_balance > 0
             AND DATEDIFF(UTC_TIMESTAMP(), iv.invoice_due_date) > 0 THEN "Overdue"
             ELSE iv.current_status
         END) AS receivable_status,
@@ -49,11 +73,14 @@ WITH InvoiceDetail AS (
     FROM
         sales_invoices iv
         join sales_invoice_details ivd on iv.id = ivd.sales_invoice_id
+        LEFT JOIN LatestInvoiceOutbox lio ON lio.reference_id = iv.id
+        LEFT JOIN pub_sub_message_records outbox ON outbox.id = lio.max_id
     WHERE
         iv.business_id = @businessId
         AND iv.invoice_date BETWEEN @fromDate
         AND @toDate
-        AND NOT iv.current_status = 'Draft'
+        AND NOT iv.current_status IN ('Draft', 'Void')
+        AND (outbox.processing_status IS NULL OR outbox.processing_status <> 'DEAD')
 		{{- if .BranchId }} AND iv.branch_id = @branchId {{- end }}
 		{{- if .WarehouseId }} AND iv.warehouse_id = @warehouseId {{- end }}
 		{{- if .customerId }} AND iv.customer_id = @customerId {{- end }}
@@ -74,11 +101,14 @@ CreditNoteDetail AS (
     FROM
         credit_notes cn
         join credit_note_details cnd on cn.id = cnd.credit_note_id
+        LEFT JOIN LatestCreditNoteOutbox lcn ON lcn.reference_id = cn.id
+        LEFT JOIN pub_sub_message_records cn_outbox ON cn_outbox.id = lcn.max_id
     WHERE
         cn.business_id = @businessId
         AND cn.credit_note_date BETWEEN @fromDate
         AND @toDate
-        AND NOT cn.current_status = 'Draft'
+        AND NOT cn.current_status IN ('Draft', 'Void')
+        AND (cn_outbox.processing_status IS NULL OR cn_outbox.processing_status <> 'DEAD')
 		{{- if .BranchId }} AND cn.branch_id = @branchId {{- end }}
 		{{- if .WarehouseId }} AND cn.warehouse_id = @warehouseId {{- end }}
 		{{- if .customerId }} AND cn.customer_id = @customerId {{- end }}

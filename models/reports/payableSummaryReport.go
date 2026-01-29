@@ -27,11 +27,35 @@ type PayableSummaryResponse struct {
 
 func GetPayableSummaryReport(ctx context.Context, startDate models.MyDateString, endDate models.MyDateString, supplierID *int, branchID *int, warehouseID *int) ([]*PayableSummaryResponse, error) {
 	sqlT := `
-WITH BillSummary as (
+WITH LatestBillOutbox AS (
+    SELECT
+        reference_id,
+        MAX(id) AS max_id
+    FROM
+        pub_sub_message_records
+    WHERE
+        business_id = @businessId
+        AND reference_type = 'BL'
+    GROUP BY
+        reference_id
+),
+LatestSupplierCreditOutbox AS (
+    SELECT
+        reference_id,
+        MAX(id) AS max_id
+    FROM
+        pub_sub_message_records
+    WHERE
+        business_id = @businessId
+        AND reference_type = 'SC'
+    GROUP BY
+        reference_id
+),
+BillSummary as (
     SELECT
         b.bill_date as payable_date,
         CASE
-            WHEN NOT b.current_status = 'Draft' AND b.remaining_balance > 0
+            WHEN NOT b.current_status IN ('Draft', 'Void') AND b.remaining_balance > 0
             AND DATEDIFF(UTC_TIMESTAMP(), b.bill_due_date) > 0 THEN "Overdue"
             ELSE b.current_status
         END AS payable_status,
@@ -44,10 +68,13 @@ WITH BillSummary as (
         b.exchange_rate
     FROM
         bills b
+        LEFT JOIN LatestBillOutbox lbo ON lbo.reference_id = b.id
+        LEFT JOIN pub_sub_message_records b_outbox ON b_outbox.id = lbo.max_id
     WHERE
         b.business_id = @businessId
-        AND NOT b.current_status = 'Draft'
+        AND NOT b.current_status IN ('Draft', 'Void')
         AND b.bill_date BETWEEN @fromDate AND @toDate
+        AND (b_outbox.processing_status IS NULL OR b_outbox.processing_status <> 'DEAD')
 		{{- if .BranchId }} AND b.branch_id = @branchId {{- end }}
 		{{- if .WarehouseId }} AND b.warehouse_id = @warehouseId {{- end }}
 		{{- if .SupplierId }} AND b.supplier_id = @supplierId {{- end }}
@@ -66,10 +93,13 @@ SupplierCreditSummary as (
         sc.exchange_rate
     FROM
         supplier_credits sc
+        LEFT JOIN LatestSupplierCreditOutbox lsc ON lsc.reference_id = sc.id
+        LEFT JOIN pub_sub_message_records sc_outbox ON sc_outbox.id = lsc.max_id
     WHERE
         sc.business_id = @businessId
-        AND NOT sc.current_status = 'Draft'
+        AND NOT sc.current_status IN ('Draft', 'Void')
         AND sc.supplier_credit_date BETWEEN @fromDate AND @toDate
+        AND (sc_outbox.processing_status IS NULL OR sc_outbox.processing_status <> 'DEAD')
 		{{- if .BranchId }} AND sc.branch_id = @branchId {{- end }}
 		{{- if .WarehouseId }} AND sc.warehouse_id = @warehouseId {{- end }}
 		{{- if .SupplierId }} AND sc.supplier_id = @supplierId {{- end }}

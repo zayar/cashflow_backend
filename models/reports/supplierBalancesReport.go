@@ -40,10 +40,34 @@ WITH AvailableAdvance AS (
     where
         business_id = @businessId
         {{- if .branchId }} AND branch_id = @branchId {{- end }}
-        AND NOT sca.current_status IN ('Draft')  AND sca.date <= @toDate
+        AND NOT sca.current_status IN ('Draft', 'Void')  AND sca.date <= @toDate
     group by
         sca.supplier_id,
         sca.currency_id
+),
+LatestSupplierCreditOutbox AS (
+    SELECT
+        reference_id,
+        MAX(id) AS max_id
+    FROM
+        pub_sub_message_records
+    WHERE
+        business_id = @businessId
+        AND reference_type = 'SC'
+    GROUP BY
+        reference_id
+),
+LatestBillOutbox AS (
+    SELECT
+        reference_id,
+        MAX(id) AS max_id
+    FROM
+        pub_sub_message_records
+    WHERE
+        business_id = @businessId
+        AND reference_type = 'BL'
+    GROUP BY
+        reference_id
 ),
 AvailableCredit AS (
     SELECT
@@ -54,10 +78,13 @@ AvailableCredit AS (
         sc.currency_id
     from
         supplier_credits sc
+        LEFT JOIN LatestSupplierCreditOutbox lsc ON lsc.reference_id = sc.id
+        LEFT JOIN pub_sub_message_records sc_outbox ON sc_outbox.id = lsc.max_id
     where
         business_id = @businessId
         {{- if .branchId }} AND branch_id = @branchId {{- end }}
-        AND NOT sc.current_status IN ('Draft')  AND sc.supplier_credit_date <= @toDate
+        AND NOT sc.current_status IN ('Draft', 'Void')  AND sc.supplier_credit_date <= @toDate
+        AND (sc_outbox.processing_status IS NULL OR sc_outbox.processing_status <> 'DEAD')
     group by
         sc.supplier_id,
         sc.currency_id
@@ -76,10 +103,13 @@ Bill AS (
         ) adjusted_total_paid_amount
     from
         bills b
+        LEFT JOIN LatestBillOutbox lbo ON lbo.reference_id = b.id
+        LEFT JOIN pub_sub_message_records b_outbox ON b_outbox.id = lbo.max_id
     where
         business_id = @businessId
         {{- if .branchId }} AND branch_id = @branchId {{- end }}
-        AND NOT b.current_status IN ('Draft')  AND b.bill_date <= @toDate
+        AND NOT b.current_status IN ('Draft', 'Void')  AND b.bill_date <= @toDate
+        AND (b_outbox.processing_status IS NULL OR b_outbox.processing_status <> 'DEAD')
     group by
         b.supplier_id,
         b.currency_id
