@@ -43,11 +43,11 @@ func UpdateStockClosingBalances(tx *gorm.DB, newStockHistories []*StockHistory, 
 				warehouse_id,
 				product_id,
 				product_type,
-				? + SUM(qty) OVER (PARTITION BY business_id, warehouse_id, product_id, product_type ORDER BY stock_date, is_outgoing, id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS closing_qty_balance,
-				? + SUM(qty * base_unit_value) OVER (PARTITION BY business_id, warehouse_id, product_id, product_type ORDER BY stock_date, is_outgoing, id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS closing_asset_value_balance,
-				? + SUM(CASE WHEN is_outgoing THEN 0 ELSE qty END) OVER (PARTITION BY business_id, warehouse_id, product_id, product_type ORDER BY stock_date, is_outgoing, id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cumulative_incoming_qty_balance,
-				? + SUM(CASE WHEN is_outgoing THEN ABS(qty) ELSE 0 END)  OVER (PARTITION BY business_id, warehouse_id, product_id, product_type ORDER BY stock_date, is_outgoing, id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cumulative_outgoing_qty_balance,
-				? + ROW_NUMBER() OVER (PARTITION BY business_id, warehouse_id, product_id, product_type ORDER BY stock_date, is_outgoing, id) AS cumulative_sequence
+				? + SUM(qty) OVER (PARTITION BY business_id, warehouse_id, product_id, product_type ORDER BY stock_date, id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS closing_qty_balance,
+				? + SUM(qty * base_unit_value) OVER (PARTITION BY business_id, warehouse_id, product_id, product_type ORDER BY stock_date, id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS closing_asset_value_balance,
+				? + SUM(CASE WHEN is_outgoing THEN 0 ELSE qty END) OVER (PARTITION BY business_id, warehouse_id, product_id, product_type ORDER BY stock_date, id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cumulative_incoming_qty_balance,
+				? + SUM(CASE WHEN is_outgoing THEN ABS(qty) ELSE 0 END)  OVER (PARTITION BY business_id, warehouse_id, product_id, product_type ORDER BY stock_date, id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cumulative_outgoing_qty_balance,
+				? + ROW_NUMBER() OVER (PARTITION BY business_id, warehouse_id, product_id, product_type ORDER BY stock_date, id) AS cumulative_sequence
 			FROM stock_histories
 			WHERE business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND stock_date >= ?
 			) AS temp
