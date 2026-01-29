@@ -70,7 +70,7 @@ func (r *accountJournalResolver) ReferenceData(ctx context.Context, obj *models.
 	switch obj.ReferenceType {
 	// 'JN'/Journal,'IV'/SalesInvoice,'IP'/PaidInvoice,'CN'/CreditNote,'BL'/Bill,'BP'/SupplierPaidBill
 	case "JN":
-		return models.GetJournal(ctx, obj.ReferenceId)
+		return middlewares.GetJournal(ctx, obj.ReferenceId)
 	case "IV":
 		return middlewares.GetSalesInvoice(ctx, obj.ReferenceId)
 	case "IP":
@@ -280,7 +280,7 @@ func (r *billResolver) PurchaseOrder(ctx context.Context, obj *models.Bill) (*mo
 
 // BillPayment is the resolver for the billPayment field.
 func (r *billResolver) BillPayment(ctx context.Context, obj *models.Bill) ([]*models.BillPayment, error) {
-	return models.GetBillPayments(ctx, obj.ID)
+	return middlewares.GetBillPayments(ctx, obj.ID)
 }
 
 // Warehouse is the resolver for the warehouse field.

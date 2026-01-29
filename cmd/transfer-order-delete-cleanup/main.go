@@ -25,9 +25,13 @@ import (
 //
 // Single transfer order:
 //   go run ./cmd/transfer-order-delete-cleanup -business-id=... -transfer-order-id=71 -dry-run=false -confirm=DELETE
+//
+// ALL transfer orders (dangerous; reverses every TO ledger row):
+//   go run ./cmd/transfer-order-delete-cleanup -business-id=... -all -dry-run=false -confirm=DELETE
 func main() {
 	businessID := flag.String("business-id", "", "Required: business id (uuid)")
 	transferOrderID := flag.Int("transfer-order-id", 0, "Optional: clean up a single transfer order id")
+	all := flag.Bool("all", false, "Clean up ALL transfer orders (even if still exists)")
 	dryRun := flag.Bool("dry-run", true, "List only (no writes)")
 	confirm := flag.String("confirm", "", "Type DELETE to proceed when dry-run=false")
 	force := flag.Bool("force", false, "Allow cleanup even if transfer order still exists")
@@ -54,6 +58,38 @@ func main() {
 		if err := cleanupOne(db, logger, *businessID, *transferOrderID, *dryRun, *force); err != nil {
 			fmt.Fprintf(os.Stderr, "cleanup failed: %v\n", err)
 			os.Exit(1)
+		}
+		return
+	}
+
+	if *all {
+		// Clean ALL transfer orders (by ledger reference_id).
+		type row struct {
+			RefID int `gorm:"column:ref_id"`
+		}
+		var refs []row
+		if err := db.Raw(`
+			SELECT DISTINCT sh.reference_id AS ref_id
+			FROM stock_histories sh
+			WHERE sh.business_id = ?
+			  AND sh.reference_type = 'TO'
+			  AND sh.is_reversal = 0
+			  AND sh.reversed_by_stock_history_id IS NULL
+			ORDER BY sh.reference_id
+		`, strings.TrimSpace(*businessID)).Scan(&refs).Error; err != nil {
+			fmt.Fprintf(os.Stderr, "scan failed: %v\n", err)
+			os.Exit(1)
+		}
+		if len(refs) == 0 {
+			fmt.Println("no transfer order ledger rows found")
+			return
+		}
+		fmt.Printf("found %d transfer orders (ledger refs)\n", len(refs))
+		for _, r := range refs {
+			if err := cleanupOne(db, logger, *businessID, r.RefID, *dryRun, true); err != nil {
+				fmt.Fprintf(os.Stderr, "cleanup failed for transfer_order_id=%d: %v\n", r.RefID, err)
+				os.Exit(1)
+			}
 		}
 		return
 	}
@@ -109,15 +145,15 @@ func cleanupOne(db *gorm.DB, logger *logrus.Logger, businessID string, transferO
 		return nil
 	}
 
-	// Gather ledger stats for reporting.
+	// Gather ledger stats for reporting. (row_count avoids MySQL reserved word "rows")
 	type stats struct {
-		Rows int64  `gorm:"column:rows"`
+		Rows int64  `gorm:"column:row_count"`
 		Net  string `gorm:"column:net"`
 	}
 	var s stats
 	if err := db.Raw(`
 		SELECT
-			COUNT(*) AS rows,
+			COUNT(*) AS row_count,
 			COALESCE(SUM(qty * base_unit_value), 0) AS net
 		FROM stock_histories
 		WHERE business_id = ?

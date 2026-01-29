@@ -61,6 +61,7 @@ type Loaders struct {
 	billLoader         *dataloader.Loader[int, *models.Bill]
 	billDetailLoader   *dataloader.Loader[int, []*models.BillDetail]
 	billDocumentLoader *dataloader.Loader[int, []*models.Document]
+	billPaymentLoader  *dataloader.Loader[int, []*models.BillPayment]
 
 	salesOrderLoader           *dataloader.Loader[int, *models.SalesOrder]
 	salesOrderDetailLoader     *dataloader.Loader[int, []*models.SalesOrderDetail]
@@ -87,6 +88,7 @@ type Loaders struct {
 	supplierPaidBillByIDLoader  *dataloader.Loader[int, *models.SupplierPaidBill]
 
 	accountJournalLoader *dataloader.Loader[int, *models.AccountJournal]
+	journalByIDLoader    *dataloader.Loader[int, *models.Journal]
 
 	taxLoader      *dataloader.Loader[int, *models.Tax]
 	taxGroupLoader *dataloader.Loader[int, *models.TaxGroup]
@@ -198,6 +200,7 @@ func NewLoaders(conn *gorm.DB) *Loaders {
 
 	billReader := &billReader{db: conn}
 	billDetailReader := &billDetailReader{db: conn}
+	billPaymentReader := &billPaymentReader{db: conn}
 
 	salesOrderReader := &salesOrderReader{db: conn}
 	salesOrderDetailReader := &salesOrderDetailReader{db: conn}
@@ -219,6 +222,7 @@ func NewLoaders(conn *gorm.DB) *Loaders {
 	supplierPaidBillByIDReader := &supplierPaidBillByIDReader{db: conn}
 
 	accountJournalReader := &accountJournalReader{db: conn}
+	journalByIDReader := &journalByIDReader{db: conn}
 
 	taxReader := &taxReader{db: conn}
 	taxGroupReader := &taxGroupReader{db: conn}
@@ -315,6 +319,7 @@ func NewLoaders(conn *gorm.DB) *Loaders {
 		billLoader:         dataloader.NewBatchedLoader(billReader.getBills, dataloader.WithWait[int, *models.Bill](time.Millisecond)),
 		billDetailLoader:   dataloader.NewBatchedLoader(billDetailReader.GetBillDetails, dataloader.WithWait[int, []*models.BillDetail](time.Millisecond)),
 		billDocumentLoader: dataloader.NewBatchedLoader(billDocumentReader.GetDocuments, dataloader.WithWait[int, []*models.Document](time.Millisecond)),
+		billPaymentLoader:  dataloader.NewBatchedLoader(billPaymentReader.GetBillPayments, dataloader.WithWait[int, []*models.BillPayment](time.Millisecond)),
 
 		salesOrderLoader:           dataloader.NewBatchedLoader(salesOrderReader.getSalesOrders, dataloader.WithWait[int, *models.SalesOrder](time.Millisecond)),
 		salesOrderDetailLoader:     dataloader.NewBatchedLoader(salesOrderDetailReader.GetSalesOrderDetails, dataloader.WithWait[int, []*models.SalesOrderDetail](time.Millisecond)),
@@ -341,6 +346,7 @@ func NewLoaders(conn *gorm.DB) *Loaders {
 		supplierPaidBillByIDLoader: dataloader.NewBatchedLoader(supplierPaidBillByIDReader.getSupplierPaidBillsByID, dataloader.WithWait[int, *models.SupplierPaidBill](time.Millisecond)),
 
 		accountJournalLoader: dataloader.NewBatchedLoader(accountJournalReader.GetAccountJournals, dataloader.WithWait[int, *models.AccountJournal](time.Millisecond)),
+		journalByIDLoader:    dataloader.NewBatchedLoader(journalByIDReader.getJournalsByID, dataloader.WithWait[int, *models.Journal](time.Millisecond)),
 
 		taxLoader:      dataloader.NewBatchedLoader(taxReader.getTaxes, dataloader.WithWait[int, *models.Tax](time.Millisecond)),
 		taxGroupLoader: dataloader.NewBatchedLoader(taxGroupReader.getTaxGroups, dataloader.WithWait[int, *models.TaxGroup](time.Millisecond)),
