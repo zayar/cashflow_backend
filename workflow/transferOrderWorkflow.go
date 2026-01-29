@@ -323,6 +323,49 @@ func CreateTransferOrder(tx *gorm.DB, logger *logrus.Logger, recordId int, recor
 		return 0, nil, 0, err
 	}
 
+	// Build existing incoming counts to make transfer-in creation idempotent.
+	// This prevents duplicate transfer-in rows when rebuild/valuation syncs run
+	// before this workflow creates incoming rows.
+	type inKey struct {
+		wh     int
+		pid    int
+		pt     models.ProductType
+		b      string
+		rdi    int
+		q      string
+		uv     string
+		date   string
+		refTyp models.StockReferenceType
+		refId  int
+	}
+	existingCounts := make(map[inKey]int)
+	var existingInRows []*models.StockHistory
+	if err := tx.
+		Where("business_id = ? AND reference_type = ? AND reference_id = ? AND is_reversal = 0 AND reversed_by_stock_history_id IS NULL AND is_transfer_in = 1",
+			businessId, models.StockReferenceTypeTransferOrder, transferOrder.ID).
+		Find(&existingInRows).Error; err != nil {
+		config.LogError(logger, "TransferOrderWorkflow.go", "CreateTransferOrder", "GetExistingTransferInRows", transferOrder.ID, err)
+		return 0, nil, 0, err
+	}
+	for _, r := range existingInRows {
+		if r == nil {
+			continue
+		}
+		key := inKey{
+			wh:     r.WarehouseId,
+			pid:    r.ProductId,
+			pt:     r.ProductType,
+			b:      r.BatchNumber,
+			rdi:    r.ReferenceDetailID,
+			q:      r.Qty.String(),
+			uv:     r.BaseUnitValue.String(),
+			date:   r.StockDate.UTC().Format("2006-01-02"),
+			refTyp: r.ReferenceType,
+			refId:  r.ReferenceID,
+		}
+		existingCounts[key]++
+	}
+
 	for _, updatedOutStock := range updatedTransferOutStockHistories {
 		// Clone each outgoing valuation row into an incoming row for destination.
 		//
@@ -364,6 +407,23 @@ func CreateTransferOrder(tx *gorm.DB, logger *logrus.Logger, recordId int, recor
 		in.ReversedByStockHistoryId = nil
 		in.ReversalReason = nil
 		in.ReversedAt = nil
+
+		key := inKey{
+			wh:     in.WarehouseId,
+			pid:    in.ProductId,
+			pt:     in.ProductType,
+			b:      in.BatchNumber,
+			rdi:    in.ReferenceDetailID,
+			q:      in.Qty.String(),
+			uv:     in.BaseUnitValue.String(),
+			date:   in.StockDate.UTC().Format("2006-01-02"),
+			refTyp: in.ReferenceType,
+			refId:  in.ReferenceID,
+		}
+		if c := existingCounts[key]; c > 0 {
+			existingCounts[key] = c - 1
+			continue
+		}
 
 		err = tx.Create(&in).Error
 		if err != nil {
