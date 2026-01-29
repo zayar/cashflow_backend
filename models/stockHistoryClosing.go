@@ -50,6 +50,8 @@ func UpdateStockClosingBalances(tx *gorm.DB, newStockHistories []*StockHistory, 
 				? + ROW_NUMBER() OVER (PARTITION BY business_id, warehouse_id, product_id, product_type ORDER BY stock_date, id) AS cumulative_sequence
 			FROM stock_histories
 			WHERE business_id = ? AND warehouse_id = ? AND product_id = ? AND product_type = ? AND stock_date >= ?
+			  AND is_reversal = 0
+			  AND reversed_by_stock_history_id IS NULL
 			) AS temp
 			ON t.id = temp.id
 			SET
