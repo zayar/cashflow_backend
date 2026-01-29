@@ -453,7 +453,7 @@ func GetTopExpense(ctx context.Context, filterType string) ([]*TopExpensesRespon
                     AND acb.branch_id = 0
                     AND acb.currency_id = ?
                     AND acb.account_id IN (
-                        SELECT id FROM accounts WHERE main_type = ?
+                        SELECT id FROM accounts WHERE accounts.main_type = ? AND accounts.business_id = ?
                     )
             )
             SELECT 
@@ -467,7 +467,7 @@ func GetTopExpense(ctx context.Context, filterType string) ([]*TopExpensesRespon
                 amount DESC`
 
 	if err := db.Raw(query,
-		startDate, endDate, businessId, business.BaseCurrencyId, expense).
+		startDate, endDate, businessId, business.BaseCurrencyId, expense, businessId).
 		Scan(&topExpenses).Error; err != nil {
 		return nil, err
 	}
@@ -531,19 +531,19 @@ func GetTotalCashFlow(ctx context.Context, filterType string) (*CashFlowReponse,
 						AND acb.branch_id = 0
 						AND acb.currency_id = ?
 						AND acb.account_id IN (
-							SELECT id FROM accounts WHERE detail_type IN ?
+							SELECT id FROM accounts WHERE accounts.detail_type IN ? AND accounts.business_id = ?
 						)
 					GROUP BY ml.month_date
 				),
 				BankCash AS (
 					SELECT 
-						DATE_FORMAT(transaction_date, '%Y-%m') AS month,
+						DATE_FORMAT(acb.transaction_date, '%Y-%m') AS month,
 						ac.detail_type AS detail_type,
 						ac.main_type AS main_type,
 						ac.id AS account_id,
-						balance
+						acb.balance AS balance
 					FROM account_currency_daily_balances AS acb
-					JOIN accounts AS ac ON acb.account_id = ac.id
+					JOIN accounts AS ac ON acb.account_id = ac.id AND ac.business_id = acb.business_id
 					WHERE 
 						acb.transaction_date >= ?
 						AND acb.transaction_date <= ?
@@ -551,7 +551,7 @@ func GetTotalCashFlow(ctx context.Context, filterType string) (*CashFlowReponse,
 						AND acb.branch_id = 0
 						AND acb.currency_id = ?
 						AND acb.account_id IN (
-							SELECT id FROM accounts WHERE detail_type IN ?
+							SELECT id FROM accounts WHERE accounts.detail_type IN ? AND accounts.business_id = ?
 						)
 				)
 				SELECT
@@ -576,8 +576,8 @@ func GetTotalCashFlow(ctx context.Context, filterType string) (*CashFlowReponse,
                 `
 
 	rows, err := db.Raw(query,
-		startDate, endDate, businessId, business.BaseCurrencyId, accountTypes,
-		startDate, endDate, businessId, business.BaseCurrencyId, accountTypes,
+		startDate, endDate, businessId, business.BaseCurrencyId, accountTypes, businessId,
+		startDate, endDate, businessId, business.BaseCurrencyId, accountTypes, businessId,
 	).Rows()
 
 	if err != nil {
