@@ -55,10 +55,22 @@ AvailableCredit AS (
     where
         business_id = @businessId
         {{- if .branchId }} AND branch_id = @branchId {{- end }}
-        AND NOT cn.current_status IN ('Draft') AND credit_note_date <= @toDate
+        AND NOT cn.current_status IN ('Draft', 'Void') AND credit_note_date <= @toDate
     group by
         cn.customer_id,
         cn.currency_id
+),
+LatestInvoiceOutbox AS (
+    SELECT
+        reference_id,
+        MAX(id) AS max_id
+    FROM
+        pub_sub_message_records
+    WHERE
+        business_id = @businessId
+        AND reference_type = 'IV'
+    GROUP BY
+        reference_id
 ),
 SalesInvoice AS (
     SELECT
@@ -70,10 +82,14 @@ SalesInvoice AS (
         currency_id
     from
         sales_invoices iv
+        LEFT JOIN LatestInvoiceOutbox lio ON lio.reference_id = iv.id
+        LEFT JOIN pub_sub_message_records outbox ON outbox.id = lio.max_id
     where
-        business_id = @businessId
-        {{- if .branchId }} AND branch_id = @branchId {{- end }}
-        AND NOT iv.current_status IN ('Draft')  AND iv.invoice_date <= @toDate
+        iv.business_id = @businessId
+        {{- if .branchId }} AND iv.branch_id = @branchId {{- end }}
+        AND NOT iv.current_status IN ('Draft', 'Void')
+        AND iv.invoice_date <= @toDate
+        AND (outbox.processing_status IS NULL OR outbox.processing_status <> 'DEAD')
     group by
         iv.customer_id,
         iv.currency_id
