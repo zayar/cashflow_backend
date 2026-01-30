@@ -67,9 +67,9 @@ AvailableCredit AS (
         LEFT JOIN LatestCreditNoteOutbox lcn ON lcn.reference_id = cn.id
         LEFT JOIN pub_sub_message_records cn_outbox ON cn_outbox.id = lcn.max_id
     where
-        business_id = @businessId
-        {{- if .branchId }} AND branch_id = @branchId {{- end }}
-        AND NOT cn.current_status IN ('Draft', 'Void') AND credit_note_date <= @toDate
+        cn.business_id = @businessId
+        {{- if .branchId }} AND cn.branch_id = @branchId {{- end }}
+        AND NOT cn.current_status IN ('Draft', 'Void') AND cn.credit_note_date <= @toDate
         AND (cn_outbox.processing_status IS NULL OR cn_outbox.processing_status <> 'DEAD')
     group by
         cn.customer_id,
