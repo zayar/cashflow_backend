@@ -207,7 +207,11 @@ func GetOpeningBalance(ctx context.Context, branchId int) (*OpeningBalance, erro
 			SELECT at.account_id, SUM(at.base_debit) AS debit, SUM(at.base_credit) AS credit FROM account_transactions at 
 			INNER JOIN account_journals aj ON at.journal_id = aj.id
 			INNER join accounts ac ON at.account_id = ac.id
-			WHERE aj.business_id = ? AND aj.branch_id = ? 
+			WHERE aj.business_id = ? AND aj.branch_id = ?
+			-- IMPORTANT: only include active (non-reversal, not-reversed) journals.
+			-- Otherwise each Opening Balance "Save" (which creates a reversal journal) will make UI totals appear to grow.
+			AND aj.is_reversal = 0
+			AND (aj.reversed_by_journal_id IS NULL OR aj.reversed_by_journal_id = 0)
 			AND aj.reference_type in ('OB','SOB','COB','POS','PCOS','PGOS')
 			AND ac.main_type in ('Asset','Liability','Equity')
 			GROUP BY at.account_id
