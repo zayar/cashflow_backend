@@ -40,9 +40,10 @@ SELECT
     invoice.invoice_due_date,
     (
         CASE
-            WHEN remaining_balance > 0
-            AND DATEDIFF(UTC_TIMESTAMP(), invoice_due_date) <= 0 THEN 'Overdue'
-            ELSE current_status
+            WHEN invoice.current_status IN ('Draft', 'Void') THEN invoice.current_status
+            WHEN invoice.remaining_balance > 0
+            AND DATEDIFF(UTC_TIMESTAMP(), invoice.invoice_due_date) > 0 THEN 'Overdue'
+            ELSE invoice.current_status
         END
     ) invoice_status,
     (
@@ -94,7 +95,6 @@ FROM
 WHERE
     invoice.business_id = @businessId
     AND invoice.invoice_date BETWEEN @fromDate AND @toDate
-    AND invoice.current_status NOT IN ('Draft', 'Void')
     AND (invoice_outbox.processing_status IS NULL OR invoice_outbox.processing_status <> 'DEAD')
 	{{- if .warehouseId }} AND invoice.warehouse_id = @warehouseId {{- end }}
 	{{- if .branchId }} AND invoice.branch_id = @branchId {{- end }}

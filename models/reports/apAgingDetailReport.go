@@ -52,7 +52,7 @@ WITH LatestBillOutbox AS (
 ),
 BillAging AS (
     SELECT
-        id,
+        bills.id,
         bill_number,
         current_status,
         exchange_rate,

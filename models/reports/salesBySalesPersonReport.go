@@ -58,38 +58,40 @@ LatestCreditNoteOutbox AS (
 SalesInvoices AS (
     SELECT
         sales_person_id AS spid,
-        COUNT(id) AS invoiceCount,
-        SUM(invoice_total_amount * (CASE WHEN currency_id = @baseCurrencyId THEN 1 ELSE exchange_rate END)) AS totalInvoiceSalesWithTax,
-        SUM(invoice_tax_amount * (CASE WHEN currency_id = @baseCurrencyId THEN 1 ELSE exchange_rate END)) AS totalInvoiceTax,
-        SUM(invoice_discount_amount * (CASE WHEN currency_id = @baseCurrencyId THEN 1 ELSE exchange_rate END)) AS totalInvoiceDiscount
+        COUNT(sales_invoices.id) AS invoiceCount,
+        SUM(sales_invoices.invoice_total_amount * (CASE WHEN sales_invoices.currency_id = @baseCurrencyId THEN 1 ELSE sales_invoices.exchange_rate END)) AS totalInvoiceSalesWithTax,
+        SUM(sales_invoices.invoice_tax_amount * (CASE WHEN sales_invoices.currency_id = @baseCurrencyId THEN 1 ELSE sales_invoices.exchange_rate END)) AS totalInvoiceTax,
+        SUM(sales_invoices.invoice_discount_amount * (CASE WHEN sales_invoices.currency_id = @baseCurrencyId THEN 1 ELSE sales_invoices.exchange_rate END)) AS totalInvoiceDiscount
     FROM
         sales_invoices
         LEFT JOIN LatestInvoiceOutbox lio ON lio.reference_id = sales_invoices.id
         LEFT JOIN pub_sub_message_records iv_outbox ON iv_outbox.id = lio.max_id
     WHERE
-        invoice_date BETWEEN @fromDate AND @toDate
-        AND current_status IN ('Paid', 'Partial Paid', 'Confirmed')
+        sales_invoices.business_id = @businessId
+        AND sales_invoices.invoice_date BETWEEN @fromDate AND @toDate
+        AND sales_invoices.current_status IN ('Paid', 'Partial Paid', 'Confirmed')
         AND (iv_outbox.processing_status IS NULL OR iv_outbox.processing_status <> 'DEAD')
-       {{- if .branchId }} AND branch_id = @branchId {{- end }}
+       {{- if .branchId }} AND sales_invoices.branch_id = @branchId {{- end }}
     GROUP BY
         sales_person_id
 ),
 CreditNotes as (
     SELECT
         sales_person_id AS spid,
-        COUNT(id) AS creditNoteCount,
-        SUM(credit_note_total_amount * (CASE WHEN currency_id = @baseCurrencyId THEN 1 ELSE exchange_rate END)) AS totalCreditNoteSalesWithTax,
-        SUM(credit_note_tax_amount * (CASE WHEN currency_id = @baseCurrencyId THEN 1 ELSE exchange_rate END)) AS totalCreditNoteTax,
-        SUM(credit_note_discount_amount * (CASE WHEN currency_id = @baseCurrencyId THEN 1 ELSE exchange_rate END)) AS totalCreditNoteDiscount
+        COUNT(credit_notes.id) AS creditNoteCount,
+        SUM(credit_notes.credit_note_total_amount * (CASE WHEN credit_notes.currency_id = @baseCurrencyId THEN 1 ELSE credit_notes.exchange_rate END)) AS totalCreditNoteSalesWithTax,
+        SUM(credit_notes.credit_note_tax_amount * (CASE WHEN credit_notes.currency_id = @baseCurrencyId THEN 1 ELSE credit_notes.exchange_rate END)) AS totalCreditNoteTax,
+        SUM(credit_notes.credit_note_discount_amount * (CASE WHEN credit_notes.currency_id = @baseCurrencyId THEN 1 ELSE credit_notes.exchange_rate END)) AS totalCreditNoteDiscount
     FROM
         credit_notes
         LEFT JOIN LatestCreditNoteOutbox lcn ON lcn.reference_id = credit_notes.id
         LEFT JOIN pub_sub_message_records cn_outbox ON cn_outbox.id = lcn.max_id
     WHERE
-        credit_note_date BETWEEN @fromDate AND @toDate
-        AND current_status = 'Closed'
+        credit_notes.business_id = @businessId
+        AND credit_notes.credit_note_date BETWEEN @fromDate AND @toDate
+        AND credit_notes.current_status = 'Closed'
         AND (cn_outbox.processing_status IS NULL OR cn_outbox.processing_status <> 'DEAD')
-       {{- if .branchId }} AND branch_id = @branchId {{- end }}
+       {{- if .branchId }} AND credit_notes.branch_id = @branchId {{- end }}
     GROUP BY
         sales_person_id
 )

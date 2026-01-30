@@ -77,7 +77,7 @@ WITH LatestInvoiceOutbox AS (
 ),
 InvoiceAging AS (
     SELECT
-        id,
+        sales_invoices.id,
         invoice_number,
         current_status,
         exchange_rate,
