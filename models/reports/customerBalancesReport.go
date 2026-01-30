@@ -14,11 +14,17 @@ type CustomerBalance struct {
 	CustomerName       string          `json:"customerName"`
 	InvoiceBalance     decimal.Decimal `json:"invoiceBalance"`
 	CustomerCredit     decimal.Decimal `json:"customerCredit"`
+	CreditNoteIssued   decimal.Decimal `json:"creditNoteIssued"`
+	CreditApplied      decimal.Decimal `json:"creditApplied"`
+	RemainingCredit    decimal.Decimal `json:"remainingCredit"`
 	CustomerAdvance    decimal.Decimal `json:"customerAdvance"`
 	ReceivedAmount     decimal.Decimal `json:"receivedAmount"`
 	ClosingBalance     decimal.Decimal `json:"closingBalance"`
 	InvoiceBalanceFcy  decimal.Decimal `json:"invoiceBalanceFcy"`
 	CustomerCreditFcy  decimal.Decimal `json:"customerCreditFcy"`
+	CreditNoteIssuedFcy decimal.Decimal `json:"creditNoteIssuedFcy"`
+	CreditAppliedFcy    decimal.Decimal `json:"creditAppliedFcy"`
+	RemainingCreditFcy  decimal.Decimal `json:"remainingCreditFcy"`
 	CustomerAdvanceFcy decimal.Decimal `json:"customerAdvanceFcy"`
 	ReceivedAmountFcy  decimal.Decimal `json:"receivedAmountFcy"`
 	ClosingBalanceFcy  decimal.Decimal `json:"closingBalanceFcy"`
@@ -318,25 +324,64 @@ LatestCreditNoteOutbox AS (
     GROUP BY
         reference_id
 ),
-AvailableCredit AS (
+CreditNoteIssued AS (
     SELECT
-        (case when currency_id = @baseCurrencyId then 0 else SUM(cn.remaining_balance) end) amount,
-        SUM(cn.remaining_balance * (case when currency_id = @baseCurrencyId then 1 else exchange_rate end)) adjusted_amount,
+        cn.id AS credit_note_id,
         cn.customer_id,
-        cn.currency_id
-    from
+        cn.currency_id,
+        cn.exchange_rate,
+        cn.credit_note_total_amount AS total_amount
+    FROM
         credit_notes cn
         LEFT JOIN LatestCreditNoteOutbox lcn ON lcn.reference_id = cn.id
         LEFT JOIN pub_sub_message_records cn_outbox ON cn_outbox.id = lcn.max_id
-    where
+    WHERE
         cn.business_id = @businessId
         {{- if .branchId }} AND cn.branch_id = @branchId {{- end }}
         AND NOT cn.current_status IN ('Draft', 'Void')
         AND (cn_outbox.processing_status IS NULL OR cn_outbox.processing_status <> 'DEAD')
         {{- if .toDate }} AND cn.credit_note_date <= @transactionDate {{- end }}
-    group by
-        cn.customer_id,
-        cn.currency_id
+),
+CreditNoteAppliedByNote AS (
+    SELECT
+        cci.reference_id AS credit_note_id,
+        SUM(cci.amount) AS applied_amount,
+        SUM(
+            CASE
+                WHEN cci.currency_id = @baseCurrencyId THEN cci.amount
+                WHEN cci.invoice_currency_id = @baseCurrencyId THEN cci.amount * cci.invoice_exchange_rate
+                ELSE cci.amount * cci.exchange_rate
+            END
+        ) AS applied_amount_bcy
+    FROM
+        customer_credit_invoices cci
+    WHERE
+        cci.business_id = @businessId
+        AND cci.reference_type = 'Credit'
+        {{- if .branchId }} AND cci.branch_id = @branchId {{- end }}
+        {{- if .toDate }} AND cci.created_at <= @transactionDate {{- end }}
+    GROUP BY
+        cci.reference_id
+),
+CreditNoteSummary AS (
+    SELECT
+        cni.customer_id,
+        cni.currency_id,
+        -- issued
+        SUM(CASE WHEN cni.currency_id = @baseCurrencyId THEN 0 ELSE cni.total_amount END) AS issued_amount_fcy,
+        SUM(cni.total_amount * (CASE WHEN cni.currency_id = @baseCurrencyId THEN 1 ELSE cni.exchange_rate END)) AS issued_amount_bcy,
+        -- applied (based on apply records, filtered by created_at <= as-of)
+        SUM(CASE WHEN cni.currency_id = @baseCurrencyId THEN 0 ELSE COALESCE(cna.applied_amount, 0) END) AS applied_amount_fcy,
+        SUM(COALESCE(cna.applied_amount_bcy, 0)) AS applied_amount_bcy,
+        -- remaining (issued - applied) valued at the credit note exchange rate (so fully-applied = 0)
+        SUM(CASE WHEN cni.currency_id = @baseCurrencyId THEN 0 ELSE GREATEST(cni.total_amount - COALESCE(cna.applied_amount, 0), 0) END) AS remaining_amount_fcy,
+        SUM(GREATEST(cni.total_amount - COALESCE(cna.applied_amount, 0), 0) * (CASE WHEN cni.currency_id = @baseCurrencyId THEN 1 ELSE cni.exchange_rate END)) AS remaining_amount_bcy
+    FROM
+        CreditNoteIssued cni
+        LEFT JOIN CreditNoteAppliedByNote cna ON cna.credit_note_id = cni.credit_note_id
+    GROUP BY
+        cni.customer_id,
+        cni.currency_id
 )
 SELECT
     ATS.customer_id,
@@ -345,39 +390,54 @@ SELECT
     currencies.decimal_places,
     ATS.total_invoice_bcy invoice_balance,
     ATS.total_invoice_fcy invoice_balance_fcy,
-    COALESCE(AC.adjusted_amount, 0) customer_credit,
-    COALESCE(AC.amount, 0) customer_credit_fcy,
+    -- keep legacy "customer_credit" as remaining (unapplied) credit
+    COALESCE(CNS.remaining_amount_bcy, 0) customer_credit,
+    COALESCE(CNS.remaining_amount_fcy, 0) customer_credit_fcy,
+    COALESCE(CNS.issued_amount_bcy, 0) credit_note_issued,
+    COALESCE(CNS.issued_amount_fcy, 0) credit_note_issued_fcy,
+    COALESCE(CNS.applied_amount_bcy, 0) credit_applied,
+    COALESCE(CNS.applied_amount_fcy, 0) credit_applied_fcy,
+    COALESCE(CNS.remaining_amount_bcy, 0) remaining_credit,
+    COALESCE(CNS.remaining_amount_fcy, 0) remaining_credit_fcy,
     ATS.total_received_bcy received_amount,
     ATS.total_received_fcy received_amount_fcy,
-    (ATS.total_invoice_bcy - COALESCE(AC.adjusted_amount, 0) - ATS.total_received_bcy) closing_balance,
-    (ATS.total_invoice_fcy - COALESCE(AC.amount, 0) - ATS.total_received_fcy) closing_balance_fcy
+    -- Closing AR = Invoices - Credit Notes Issued - Cash/Write-offs/Advance applied (journal credits)
+    (ATS.total_invoice_bcy - COALESCE(CNS.issued_amount_bcy, 0) - ATS.total_received_bcy) closing_balance,
+    (ATS.total_invoice_fcy - COALESCE(CNS.issued_amount_fcy, 0) - ATS.total_received_fcy) closing_balance_fcy
 
 
     FROM AccTransactionSummary ATS
-    LEFT JOIN AvailableCredit AC ON AC.customer_id = ATS.customer_id AND AC.currency_id = ATS.currency_id
+    LEFT JOIN CreditNoteSummary CNS ON CNS.customer_id = ATS.customer_id AND CNS.currency_id = ATS.currency_id
     LEFT JOIN customers ON customers.id = ATS.customer_id
     LEFT JOIN currencies ON currencies.id = ATS.currency_id
 
 UNION ALL
 
 SELECT
-    AC.customer_id,
+    CNS.customer_id,
     customers.name customer_name,
     currencies.symbol currency_symbol,
     currencies.decimal_places,
     COALESCE(ATS.total_invoice_bcy, 0) invoice_balance,
     COALESCE(ATS.total_invoice_fcy, 0) invoice_balance_fcy,
-    COALESCE(AC.adjusted_amount, 0) customer_credit,
-    COALESCE(AC.amount, 0) customer_credit_fcy,
+    -- keep legacy "customer_credit" as remaining (unapplied) credit
+    COALESCE(CNS.remaining_amount_bcy, 0) customer_credit,
+    COALESCE(CNS.remaining_amount_fcy, 0) customer_credit_fcy,
+    COALESCE(CNS.issued_amount_bcy, 0) credit_note_issued,
+    COALESCE(CNS.issued_amount_fcy, 0) credit_note_issued_fcy,
+    COALESCE(CNS.applied_amount_bcy, 0) credit_applied,
+    COALESCE(CNS.applied_amount_fcy, 0) credit_applied_fcy,
+    COALESCE(CNS.remaining_amount_bcy, 0) remaining_credit,
+    COALESCE(CNS.remaining_amount_fcy, 0) remaining_credit_fcy,
     COALESCE(ATS.total_received_bcy, 0) received_amount,
     COALESCE(ATS.total_received_fcy, 0) received_amount_fcy,
-    (COALESCE(ATS.total_invoice_bcy, 0) - COALESCE(AC.adjusted_amount, 0) - COALESCE(ATS.total_received_bcy, 0)) closing_balance,
-    (COALESCE(ATS.total_invoice_fcy, 0) - COALESCE(AC.amount, 0) - COALESCE(ATS.total_received_fcy, 0)) closing_balance_fcy
+    (COALESCE(ATS.total_invoice_bcy, 0) - COALESCE(CNS.issued_amount_bcy, 0) - COALESCE(ATS.total_received_bcy, 0)) closing_balance,
+    (COALESCE(ATS.total_invoice_fcy, 0) - COALESCE(CNS.issued_amount_fcy, 0) - COALESCE(ATS.total_received_fcy, 0)) closing_balance_fcy
 FROM
-    AvailableCredit AC
-    LEFT JOIN AccTransactionSummary ATS ON ATS.customer_id = AC.customer_id AND ATS.currency_id = AC.currency_id
-    LEFT JOIN customers ON customers.id = AC.customer_id
-    LEFT JOIN currencies ON currencies.id = AC.currency_id
+    CreditNoteSummary CNS
+    LEFT JOIN AccTransactionSummary ATS ON ATS.customer_id = CNS.customer_id AND ATS.currency_id = CNS.currency_id
+    LEFT JOIN customers ON customers.id = CNS.customer_id
+    LEFT JOIN currencies ON currencies.id = CNS.currency_id
 WHERE ATS.customer_id IS NULL
 ORDER BY customer_name, currency_symbol
 `

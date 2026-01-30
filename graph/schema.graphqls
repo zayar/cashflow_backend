@@ -3618,11 +3618,17 @@ type CustomerBalance {
   customerName: String!
   invoiceBalance: Decimal!
   customerCredit: Decimal!
+  creditNoteIssued: Decimal!
+  creditApplied: Decimal!
+  remainingCredit: Decimal!
   customerAdvance: Decimal!
   receivedAmount: Decimal!
   closingBalance: Decimal!
   invoiceBalanceFcy: Decimal!
   customerCreditFcy: Decimal!
+  creditNoteIssuedFcy: Decimal!
+  creditAppliedFcy: Decimal!
+  remainingCreditFcy: Decimal!
   customerAdvanceFcy: Decimal!
   receivedAmountFcy: Decimal!
   closingBalanceFcy: Decimal!
