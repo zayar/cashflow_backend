@@ -81,8 +81,8 @@ AvailableCredit AS (
         LEFT JOIN LatestSupplierCreditOutbox lsc ON lsc.reference_id = sc.id
         LEFT JOIN pub_sub_message_records sc_outbox ON sc_outbox.id = lsc.max_id
     where
-        business_id = @businessId
-        {{- if .branchId }} AND branch_id = @branchId {{- end }}
+        sc.business_id = @businessId
+        {{- if .branchId }} AND sc.branch_id = @branchId {{- end }}
         AND NOT sc.current_status IN ('Draft', 'Void')  AND sc.supplier_credit_date <= @toDate
         AND (sc_outbox.processing_status IS NULL OR sc_outbox.processing_status <> 'DEAD')
     group by
@@ -106,8 +106,8 @@ Bill AS (
         LEFT JOIN LatestBillOutbox lbo ON lbo.reference_id = b.id
         LEFT JOIN pub_sub_message_records b_outbox ON b_outbox.id = lbo.max_id
     where
-        business_id = @businessId
-        {{- if .branchId }} AND branch_id = @branchId {{- end }}
+        b.business_id = @businessId
+        {{- if .branchId }} AND b.branch_id = @branchId {{- end }}
         AND NOT b.current_status IN ('Draft', 'Void')  AND b.bill_date <= @toDate
         AND (b_outbox.processing_status IS NULL OR b_outbox.processing_status <> 'DEAD')
     group by

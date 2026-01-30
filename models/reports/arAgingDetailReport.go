@@ -118,12 +118,12 @@ InvoiceAging AS (
         LEFT JOIN LatestInvoiceOutbox lio ON lio.reference_id = sales_invoices.id
         LEFT JOIN pub_sub_message_records iv_outbox ON iv_outbox.id = lio.max_id
     where
-		business_id = @businessId
+		sales_invoices.business_id = @businessId
         AND current_status in ('Confirmed', 'Partial Paid')
         AND invoice_date < @currentDate
         AND (iv_outbox.processing_status IS NULL OR iv_outbox.processing_status <> 'DEAD')
-		{{- if .warehouseId }} AND warehouse_id = @warehouseId {{- end }}
-		{{- if .branchId }} AND branch_id = @branchId {{- end }}
+		{{- if .warehouseId }} AND sales_invoices.warehouse_id = @warehouseId {{- end }}
+		{{- if .branchId }} AND sales_invoices.branch_id = @branchId {{- end }}
 )
 SELECT
     InvoiceAging.id as invoice_id,

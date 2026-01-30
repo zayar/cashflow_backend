@@ -61,11 +61,11 @@ FROM
         ) invoice_outbox_latest ON invoice_outbox_latest.reference_id = sales_invoices.id
         LEFT JOIN pub_sub_message_records invoice_outbox ON invoice_outbox.id = invoice_outbox_latest.max_id
     WHERE
-        business_id = @businessId
-            AND invoice_date BETWEEN @fromDate AND @toDate
-            AND current_status IN ('Paid' , 'Partial Paid', 'Confirmed')
+        sales_invoices.business_id = @businessId
+            AND sales_invoices.invoice_date BETWEEN @fromDate AND @toDate
+            AND sales_invoices.current_status IN ('Paid' , 'Partial Paid', 'Confirmed')
             AND (invoice_outbox.processing_status IS NULL OR invoice_outbox.processing_status <> 'DEAD')
-		{{- if .branchId }} AND branch_id = @branchId {{- end }}
+		{{- if .branchId }} AND sales_invoices.branch_id = @branchId {{- end }}
     GROUP BY customer_id) AS siv
         LEFT JOIN
     customers ON customers.id = siv.customer_id;	

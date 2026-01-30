@@ -93,12 +93,12 @@ BillAging AS (
         LEFT JOIN LatestBillOutbox lbo ON lbo.reference_id = bills.id
         LEFT JOIN pub_sub_message_records b_outbox ON b_outbox.id = lbo.max_id
     where
-        business_id = @businessId
+        bills.business_id = @businessId
         AND current_status in ('Confirmed', 'Partial Paid')
         AND bill_date < @currentDate
         AND (b_outbox.processing_status IS NULL OR b_outbox.processing_status <> 'DEAD')
-		{{- if .warehouseId }} AND warehouse_id = @warehouseId {{- end }}
-		{{- if .branchId }} AND branch_id = @branchId {{- end }}
+		{{- if .warehouseId }} AND bills.warehouse_id = @warehouseId {{- end }}
+		{{- if .branchId }} AND bills.branch_id = @branchId {{- end }}
 )
 SELECT
     BillAging.id as bill_id,
