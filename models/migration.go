@@ -36,6 +36,7 @@ func MigrateTable() {
 		&InventoryMovement{}, &CogsAllocation{},
 		&ReconciliationReport{},
 		&DocumentTemplate{},
+		&IntegrationConnection{}, &IntegrationSyncRun{}, &IntegrationEntityMapping{}, &IntegrationSyncError{},
 	)
 	if err != nil {
 		log.Fatal(err)
