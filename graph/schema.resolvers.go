@@ -790,6 +790,11 @@ func (r *mutationResolver) ChangePassword(ctx context.Context, oldPassword strin
 	return models.ChangePassword(ctx, oldPassword, newPassword)
 }
 
+// ResetPasswordUser is the resolver for the resetPasswordUser field.
+func (r *mutationResolver) ResetPasswordUser(ctx context.Context, businessID string) (*models.ResetPasswordUserResult, error) {
+	return models.ResetPasswordUser(ctx, businessID)
+}
+
 // ReprocessOutbox is the resolver for the reprocessOutbox field.
 func (r *mutationResolver) ReprocessOutbox(ctx context.Context, referenceType models.AccountReferenceType, referenceID int) (*models.OutboxStatus, error) {
 	return models.ReprocessOutbox(ctx, referenceType, referenceID)

@@ -4715,6 +4715,12 @@ type Mutation {
     @goField(forceResolver: true)
     @auth
 
+  # Admin-only: reset the business owner's login password (username is business email).
+  # Returns the new temporary password (shown once in Admin UI).
+  resetPasswordUser(businessId: String!): ResetPasswordUserResult!
+    @goField(forceResolver: true)
+    @auth
+
   reprocessOutbox(
     referenceType: AccountReferenceType!
     referenceId: Int!
@@ -5263,4 +5269,9 @@ type Mutation {
   createPosInvoicePayment(input: NewPosCheckout!): String!
     @goField(forceResolver: true)
     @auth
+}
+
+type ResetPasswordUserResult {
+  username: String!
+  tempPassword: String!
 }

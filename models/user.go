@@ -2,9 +2,11 @@ package models
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"html"
+	"math/big"
 	"os"
 	"strconv"
 	"strings"
@@ -429,4 +431,96 @@ func ChangePassword(ctx context.Context, oldPassword string, newPassword string)
 	//? log history?
 
 	return &user, tx.Commit().Error
+}
+
+type ResetPasswordUserResult struct {
+	Username     string `json:"username"`
+	TempPassword string `json:"temp_password"`
+}
+
+func generateTempPassword(length int) (string, error) {
+	const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789" // avoids 0/O and 1/l
+	if length <= 0 {
+		length = 12
+	}
+
+	var b strings.Builder
+	b.Grow(length)
+
+	for i := 0; i < length; i++ {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(alphabet))))
+		if err != nil {
+			return "", err
+		}
+		b.WriteByte(alphabet[n.Int64()])
+	}
+	return b.String(), nil
+}
+
+// ResetPasswordUser resets the business owner's password (admin-only via @auth + admin path mapping).
+// Owner username is the business email (see CreateDefaultOwner).
+func ResetPasswordUser(ctx context.Context, businessId string) (*ResetPasswordUserResult, error) {
+	isAdmin, _ := utils.GetIsAdminFromContext(ctx)
+	if !isAdmin {
+		return nil, errors.New("Unauthorized")
+	}
+
+	db := config.GetDB()
+
+	var biz Business
+	if err := db.WithContext(ctx).Model(&Business{}).Where("id = ?", businessId).First(&biz).Error; err != nil {
+		return nil, err
+	}
+
+	var user User
+	// The default owner is created with username=email and business_id set.
+	if err := db.WithContext(ctx).
+		Model(&User{}).
+		Where("business_id = ? AND username = ?", businessId, biz.Email).
+		First(&user).Error; err != nil {
+		// Fallback: match by email field if username was changed.
+		if err2 := db.WithContext(ctx).
+			Model(&User{}).
+			Where("business_id = ? AND email = ?", businessId, biz.Email).
+			First(&user).Error; err2 != nil {
+			return nil, err
+		}
+	}
+
+	tempPassword, err := generateTempPassword(12)
+	if err != nil {
+		return nil, err
+	}
+
+	hashedPassword, err := utils.HashPassword(tempPassword)
+	if err != nil {
+		return nil, err
+	}
+
+	tx := db.Begin()
+	if err := tx.WithContext(ctx).Model(&user).UpdateColumn("password", string(hashedPassword)).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	// Clear user cache so next login reads fresh password.
+	if err := config.RemoveRedisKey("User:" + user.Username); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	// Destroy all sessions so old tokens cannot continue.
+	if err := user.DestroyAllSessions(ctx); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return nil, err
+	}
+
+	return &ResetPasswordUserResult{
+		Username:     user.Username,
+		TempPassword: tempPassword,
+	}, nil
 }
