@@ -136,19 +136,24 @@ func Login(ctx context.Context, username string, password string) (*LoginInfo, e
 	if err != nil {
 		return &result, err
 	}
+	// If a cached user exists but has a stale password, fall back to DB and delete the cache key.
+	if exists {
+		err = utils.ComparePassword(user.Password, password)
+		if err != nil && err == bcrypt.ErrMismatchedHashAndPassword {
+			_ = config.RemoveRedisKey("User:" + username)
+			exists = false
+		}
+	}
 	if !exists {
 		err = db.WithContext(ctx).Model(&User{}).Where("username = ?", username).Take(&user).Error
-
 		if err != nil {
 			return &result, errors.New("invalid username or password")
 		}
-	}
-
-	// check login credentials
-	err = utils.ComparePassword(user.Password, password)
-
-	if err != nil && err == bcrypt.ErrMismatchedHashAndPassword {
-		return &result, errors.New("invalid username or password")
+		// check login credentials (DB source)
+		err = utils.ComparePassword(user.Password, password)
+		if err != nil && err == bcrypt.ErrMismatchedHashAndPassword {
+			return &result, errors.New("invalid username or password")
+		}
 	}
 
 	isActive := *user.IsActive
